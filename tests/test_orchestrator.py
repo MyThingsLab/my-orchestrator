@@ -140,6 +140,53 @@ def test_no_ready_candidates(tmp_path: Path) -> None:
     assert list(ledger)[0].detail == "next: none"
 
 
+def test_next_n_gives_each_worker_a_distinct_ranked_candidate(tmp_path: Path) -> None:
+    # Two available workers should not both get pointed at the same candidate,
+    # and no Engine call is needed since ties don't need breaking across workers.
+    repos = ["my-guard", "my-reporter"]
+    runner = FakeRunner(
+        repos=repos,
+        issues={
+            "my-guard": [issue(1, "guard bug", "2026-01-01T00:00:00Z")],
+            "my-reporter": [issue(1, "reporter bug", "2026-02-01T00:00:00Z")],
+        },
+    )
+    repo_root = make_repo_root(tmp_path, repos, signals={})
+    manifest = write_manifest(tmp_path, [])
+    engine = SpyEngine()
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+
+    recs = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=manifest,
+        repo_root=repo_root,
+        ledger=ledger,
+        runner=runner,
+        engine=engine,
+    ).next_n(2)
+
+    assert engine.calls == []
+    assert [r.chosen.id for r in recs if r.chosen] == ["my-guard#1", "my-reporter#1"]
+    assert len(list(ledger)) == 2
+
+
+def test_next_n_fewer_ready_candidates_than_workers(tmp_path: Path) -> None:
+    runner = FakeRunner(repos=[], issues={})
+    manifest = write_manifest(tmp_path, [mentry("MyTester", "my-tester", "2026-07-05")])
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+
+    recs = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=manifest,
+        repo_root=make_repo_root(tmp_path, [], signals={}),
+        ledger=ledger,
+        runner=runner,
+    ).next_n(3)
+
+    assert len(recs) == 1
+    assert recs[0].chosen is not None and recs[0].chosen.id == "scaffold:my-tester"
+
+
 class _DenyEdits:
     def evaluate(self, action: Action) -> PolicyResult:
         return PolicyResult(Decision.DENY, reason="no", rule="deny_all")

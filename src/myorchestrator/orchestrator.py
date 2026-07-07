@@ -67,6 +67,14 @@ class Orchestrator:
         self.tracking = tracking
 
     def next(self) -> Recommendation:
+        return self.next_n(1)[0]
+
+    def next_n(self, count: int) -> list[Recommendation]:
+        # count=1 keeps the original single-worker path (Engine tie-break and the
+        # tracking-issue update) untouched. count>1 is for multiple concurrently
+        # available workers: each gets a distinct ranked candidate, so ties among
+        # the picks don't need breaking — every tied candidate is getting worked
+        # on anyway, just by a different worker.
         repos = list_repos(self.runner, self.org)  # step 1
         built = set(repos)
         urgency = scan_urgency(self.repo_root, repos)  # step 4 signals
@@ -75,27 +83,44 @@ class Orchestrator:
             *scaffold_candidates(load_manifest(self.manifest_path), built),  # step 2+3 (proposals)
         ]
         ranked = rank(candidates)  # step 4 ranking
-        top = leaders(ranked)
 
-        if not top:
+        if not ranked:
             rec = Recommendation(chosen=None, reason="no ready candidates", candidates=ranked)
-        elif len(top) == 1:
-            rec = Recommendation(
-                chosen=top[0],
-                reason="sole top candidate by oldest-first ranking",
+            self._record(rec)
+            return [rec]
+
+        if count == 1:
+            top = leaders(ranked)
+            if len(top) == 1:
+                rec = Recommendation(
+                    chosen=top[0],
+                    reason="sole top candidate by oldest-first ranking",
+                    candidates=ranked,
+                    engine_used=False,
+                )
+            else:
+                chosen, reason = self._break_tie(top)  # step 5
+                rec = Recommendation(
+                    chosen=chosen, reason=reason, candidates=ranked, engine_used=True
+                )
+            self._record(rec)
+            if rec.chosen is not None and self.tracking is not None:
+                self._update_tracking(rec.chosen)
+            return [rec]
+
+        picks = ranked[:count]
+        recs = [
+            Recommendation(
+                chosen=c,
+                reason=f"ranked pick {i + 1}/{len(picks)} for {count} available workers",
                 candidates=ranked,
                 engine_used=False,
             )
-        else:
-            chosen, reason = self._break_tie(top)  # step 5
-            rec = Recommendation(
-                chosen=chosen, reason=reason, candidates=ranked, engine_used=True
-            )
-
-        self._record(rec)
-        if rec.chosen is not None and self.tracking is not None:
-            self._update_tracking(rec.chosen)
-        return rec
+            for i, c in enumerate(picks)
+        ]
+        for rec in recs:
+            self._record(rec)
+        return recs
 
     def _break_tie(self, tied: list[Candidate]) -> tuple[Candidate, str]:
         result = self.engine.run(
