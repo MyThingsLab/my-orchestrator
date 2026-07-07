@@ -148,6 +148,24 @@ def test_claude_cli_engine_is_wired(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(captured["kwargs"]["engine"], ClaudeCLIEngine)
 
 
+def test_engine_model_flag_reaches_the_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _stub_orch(monkeypatch, one=_rec(chosen=None, reason="r"))
+
+    cli.main(["next", "--engine", "claude-cli", "--engine-model", "haiku"])
+
+    assert captured["kwargs"]["engine"]._model == "haiku"
+
+
+def test_noop_engine_stays_none_for_the_deterministic_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _stub_orch(monkeypatch, one=_rec(chosen=None, reason="r"))
+
+    cli.main(["next"])  # default --engine noop
+
+    assert captured["kwargs"]["engine"] is None
+
+
 def test_tracking_is_wired_when_both_flags_given(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _stub_orch(monkeypatch, one=_rec(chosen=None, reason="r"))
 

@@ -4,13 +4,21 @@ import argparse
 import json
 from pathlib import Path
 
-from mythings.engine import ClaudeCLIEngine, Engine, NoopEngine
+from mythings.engine import ClaudeCLIEngine, Engine
 from mythings.ledger import Ledger
 
 from myorchestrator.manifest import default_manifest_path
 from myorchestrator.orchestrator import Orchestrator, Recommendation, Tracking
 
-_ENGINES: dict[str, type[Engine]] = {"noop": NoopEngine, "claude-cli": ClaudeCLIEngine}
+_ENGINE_NAMES = ("noop", "claude-cli")
+
+
+def build_engine(name: str, *, model: str | None = None) -> Engine | None:
+    # noop -> None so the Orchestrator runs its deterministic tie-break with no
+    # engine at all (its documented fallback), rather than a no-op reply.
+    if name == "claude-cli":
+        return ClaudeCLIEngine(model=model)
+    return None
 
 
 def _as_dict(rec: Recommendation) -> dict:
@@ -70,9 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     nxt.add_argument(
         "--engine",
-        choices=sorted(_ENGINES),
+        choices=sorted(_ENGINE_NAMES),
         default="noop",
         help="Engine backend for the tie-break (default: noop — falls back to oldest-first)",
+    )
+    nxt.add_argument(
+        "--engine-model",
+        help="model for --engine claude-cli (default: the CLI's own default; ignored by noop)",
     )
 
     args = parser.parse_args(argv)
@@ -89,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         ledger=Ledger(args.ledger),
         tracking=tracking,
-        engine=_ENGINES[args.engine]() if args.engine != "noop" else None,
+        engine=build_engine(args.engine, model=args.engine_model),
     )
     if args.count == 1:
         print(_render(orch.next(), as_json=args.json))
