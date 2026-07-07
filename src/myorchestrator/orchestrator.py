@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +22,8 @@ from myorchestrator.sources import (
 
 _ENGINE_SYSTEM = (
     "Among these deterministically-tied candidates, choose which the single available "
-    "worker should tackle next, and say why."
+    'worker should tackle next, and say why. Reply with only a JSON object: '
+    '{"chosen": "<candidate id>", "reason": "<one sentence>"}, nothing else.'
 )
 
 
@@ -131,9 +133,17 @@ class Orchestrator:
             )
         )
         by_id = {c.id: c for c in tied}
-        chosen_id = result.data.get("chosen")
+        try:
+            # The model's own reply (EngineResult.text), not .data -- for
+            # ClaudeCLIEngine, .data is the CLI's raw JSON envelope
+            # (type/is_error/result/...), never the {"chosen": ...} shape the
+            # prompt asks the model to reply with.
+            obj = json.loads(result.text) if result.text else {}
+        except json.JSONDecodeError:
+            obj = {}
+        chosen_id = obj.get("chosen")
         if isinstance(chosen_id, str) and chosen_id in by_id:
-            return by_id[chosen_id], str(result.data.get("reason", ""))
+            return by_id[chosen_id], str(obj.get("reason", ""))
         # NoopEngine / unusable reply: fall back to strict oldest-first. `tied` is
         # already ranked, so tied[0] is the deterministic winner.
         return tied[0], "tie broken deterministically (oldest-first) — Engine gave no usable choice"

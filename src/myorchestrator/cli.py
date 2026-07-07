@@ -4,10 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
+from mythings.engine import ClaudeCLIEngine, Engine, NoopEngine
 from mythings.ledger import Ledger
 
 from myorchestrator.manifest import default_manifest_path
 from myorchestrator.orchestrator import Orchestrator, Recommendation, Tracking
+
+_ENGINES: dict[str, type[Engine]] = {"noop": NoopEngine, "claude-cli": ClaudeCLIEngine}
 
 
 def _as_dict(rec: Recommendation) -> dict:
@@ -65,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="number of concurrently available workers to pick distinct candidates for",
     )
+    nxt.add_argument(
+        "--engine",
+        choices=sorted(_ENGINES),
+        default="noop",
+        help="Engine backend for the tie-break (default: noop — falls back to oldest-first)",
+    )
 
     args = parser.parse_args(argv)
     if args.count < 1:
@@ -80,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         ledger=Ledger(args.ledger),
         tracking=tracking,
+        engine=_ENGINES[args.engine]() if args.engine != "noop" else None,
     )
     if args.count == 1:
         print(_render(orch.next(), as_json=args.json))
