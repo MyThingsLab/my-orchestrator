@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from mythings._devledger import read_all
 from mythings.github import Runner
-from mythings.ledger import LedgerEntry
+from mythings.ledger import Ledger, LedgerEntry
 
 from myorchestrator.candidates import Candidate
 from myorchestrator.manifest import ProposedTool, is_ready
@@ -65,9 +66,18 @@ def issue_candidates(
     return out
 
 
-def scaffold_candidates(manifest: list[ProposedTool], built_repos: set[str]) -> list[Candidate]:
+def scaffold_candidates(
+    manifest: list[ProposedTool],
+    built_repos: set[str],
+    urgency: dict[str, int] | None = None,
+    *,
+    penalty: int = 0,
+) -> list[Candidate]:
     # A proposal with no repo yet becomes a "scaffold this tool" candidate, kept only
     # if every dependency in its manifest entry is already satisfied (readiness).
+    # `urgency` lets a MyPlanner "build X next" boost surface a specific scaffold;
+    # `penalty` lets a "pause new tools" flag push every scaffold down at once.
+    urgency = urgency or {}
     out: list[Candidate] = []
     for tool in manifest:
         if tool.repo in built_repos:
@@ -82,7 +92,7 @@ def scaffold_candidates(manifest: list[ProposedTool], built_repos: set[str]) -> 
                 title=tool.title,
                 kind="scaffold",
                 created_at=tool.added,
-                urgency=0,
+                urgency=urgency.get(tool.repo, 0) - penalty,
             )
         )
     return out
@@ -126,3 +136,56 @@ def scan_urgency(repo_root: str | Path, repos: list[str]) -> dict[str, int]:
         if score:
             out[repo] = score
     return out
+
+
+# MyPlanner feeds its plan back as one more ranking signal, the same role the
+# drift/ask urgency boosts play: a "next" item raises its repo, "soon" nudges it,
+# and a "pause new tools" flag penalizes every scaffold at once.
+_HORIZON_BOOST = {"next": 3, "soon": 1, "later": 0}
+_PAUSE_MARKERS = ("pause new tool", "freeze new tool", "no new tool", "hold new tool")
+_SCAFFOLD_PENALTY = 100  # enough to drop any paused scaffold below every live issue
+
+
+@dataclass(frozen=True)
+class PlanSignal:
+    boosts: dict[str, int] = field(default_factory=dict)  # repo -> ranking boost
+    scaffold_penalty: int = 0  # subtracted from every scaffold candidate
+
+
+def plan_signal_from_entry(entry: LedgerEntry, repos: list[str]) -> PlanSignal:
+    boosts: dict[str, int] = {}
+    for item in entry.data.get("plan") or []:
+        repo = _match_repo(str(item.get("item", "")), repos)
+        if repo is None:
+            continue
+        boosts[repo] = boosts.get(repo, 0) + _HORIZON_BOOST.get(item.get("horizon", ""), 0)
+    penalty = _SCAFFOLD_PENALTY if _has_pause_flag(entry.data.get("flags") or []) else 0
+    return PlanSignal(boosts={r: b for r, b in boosts.items() if b}, scaffold_penalty=penalty)
+
+
+def read_plan_signal(plan_ledger: str | Path, repos: list[str]) -> PlanSignal:
+    # Reads MyPlanner's own runtime ledger (its kind=plan entries live there, not in
+    # any repo's dev-ledger). Missing ledger => no signal, so this stays a soft,
+    # optional input: MyOrchestrator works exactly as before when MyPlanner hasn't run.
+    path = Path(plan_ledger)
+    if not path.exists():
+        return PlanSignal()
+    entries = [e for e in Ledger(path) if e.kind == "plan"]
+    if not entries:
+        return PlanSignal()
+    return plan_signal_from_entry(entries[-1], repos)
+
+
+def _match_repo(text: str, repos: list[str]) -> str | None:
+    low = text.lower()
+    # Longest repo name first, so "my-drift-watcher" wins over a substring "my".
+    for repo in sorted(repos, key=len, reverse=True):
+        if repo.lower() in low:
+            return repo
+    return None
+
+
+def _has_pause_flag(flags: list) -> bool:
+    return any(
+        isinstance(f, str) and any(m in f.lower() for m in _PAUSE_MARKERS) for f in flags
+    )

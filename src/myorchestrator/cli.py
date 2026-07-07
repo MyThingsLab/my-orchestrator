@@ -68,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
         help="directory holding each repo as a subdir (defaults to the workspace root)",
     )
     nxt.add_argument("--ledger", type=Path, default=Path(".mythings/ledger.jsonl"))
+    nxt.add_argument(
+        "--plan-ledger",
+        type=Path,
+        default=None,
+        help="MyPlanner's runtime ledger (default: <repo-root>/my-planner/.mythings/ledger.jsonl)",
+    )
     nxt.add_argument("--tracking-repo", help='the "next up" pinned issue repo, e.g. MyThingsLab/mythings-core')  # noqa: E501
     nxt.add_argument("--tracking-issue", type=int, help="the pinned issue number to update")
     nxt.add_argument(
@@ -102,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         ledger=Ledger(args.ledger),
         tracking=tracking,
         engine=build_engine(args.engine, model=args.engine_model),
+        plan_ledger=args.plan_ledger,
     )
     if args.count == 1:
         print(_render(orch.next(), as_json=args.json))
