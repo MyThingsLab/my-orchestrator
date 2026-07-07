@@ -77,7 +77,9 @@ def test_genuine_tie_calls_engine_once_and_uses_its_choice(tmp_path: Path) -> No
     )
     # Deterministic order would pick scaffold:my-reporter (id-sorted first); the
     # Engine overrides it, proving its reply — not the fallback — is what's reported.
-    reply = EngineResult(text="", data={"chosen": "scaffold:my-tester", "reason": "loop"})
+    # The reply lands in EngineResult.text (what a real ClaudeCLIEngine call would
+    # put there), not .data (the CLI's own JSON envelope, never this shape).
+    reply = EngineResult(text='{"chosen": "scaffold:my-tester", "reason": "loop"}', data={})
     engine = SpyEngine(reply)
     ledger = Ledger(tmp_path / "ledger.jsonl")
 
@@ -96,6 +98,34 @@ def test_genuine_tie_calls_engine_once_and_uses_its_choice(tmp_path: Path) -> No
     assert rec.chosen is not None and rec.chosen.id == "scaffold:my-tester"
     assert rec.reason == "loop"
     assert list(ledger)[0].data["chosen"] == "scaffold:my-tester"
+
+
+def test_tie_falls_back_when_engine_text_is_not_the_expected_json(tmp_path: Path) -> None:
+    # Regression: a real engine that ignores the "reply with only JSON"
+    # instruction (prose, or malformed JSON) must degrade exactly like an
+    # empty NoopEngine reply -- not silently ignore the tie-break contract.
+    runner = FakeRunner(repos=[], issues={})
+    repo_root = make_repo_root(tmp_path, [], signals={})
+    manifest = write_manifest(
+        tmp_path,
+        [
+            mentry("MyTester", "my-tester", "2026-07-05"),
+            mentry("MyReporter", "my-reporter", "2026-07-05"),
+        ],
+    )
+    engine = SpyEngine(EngineResult(text="I'd go with MyTester since it's simplest.", data={}))
+
+    rec = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=manifest,
+        repo_root=repo_root,
+        ledger=Ledger(tmp_path / "ledger.jsonl"),
+        runner=runner,
+        engine=engine,
+    ).next()
+
+    assert rec.chosen is not None and rec.chosen.id == "scaffold:my-reporter"  # fell back
+    assert "no usable choice" in rec.reason
 
 
 def test_tie_falls_back_to_oldest_first_against_noop_engine(tmp_path: Path) -> None:
