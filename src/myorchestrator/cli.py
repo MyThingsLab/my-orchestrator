@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="MyPlanner's runtime ledger (default: <repo-root>/my-planner/.mythings/ledger.jsonl)",
     )
-    nxt.add_argument("--tracking-repo", help='the "next up" pinned issue repo, e.g. MyThingsLab/mythings-core')  # noqa: E501
+    nxt.add_argument("--tracking-repo", help='the "next up" pinned issue repo, e.g. MyThingsLab/my-things-core')  # noqa: E501
     nxt.add_argument("--tracking-issue", type=int, help="the pinned issue number to update")
     nxt.add_argument(
         "--count",

@@ -4,12 +4,12 @@ You are developing **my-orchestrator**, a MyThingsLab My[X] tool.
 
 **Inherited rules:** obey [`./HARNESS.md`](./HARNESS.md) in full — the vendored
 MyThingsLab build-harness rules. Do not restate or override them. Anything not
-covered here defers to `HARNESS.md`, then `mythings-core/docs/CONVENTIONS.md`.
+covered here defers to `HARNESS.md`, then `my-things-core/docs/CONVENTIONS.md`.
 
 ## This tool
 
 - **Purpose:** reads every backlog across the fleet — open issues per repo, and
-  not-yet-scaffolded tools from the `mythings-core/docs/tools/` designs — and
+  not-yet-scaffolded tools from the `my-things-core/docs/tools/` designs — and
   produces the single next unit of work for the one available worker,
   prioritized deterministically wherever possible.
 - **The single Engine call:** optional and narrow — "given N
