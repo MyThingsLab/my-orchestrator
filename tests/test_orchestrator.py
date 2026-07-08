@@ -240,3 +240,70 @@ def test_tracking_update_is_gated_by_policy(tmp_path: Path) -> None:
 
     # DENY => the issue-edit gh call never reaches the runner.
     assert not any(c[:2] == ["issue", "edit"] for c in runner.calls)
+
+
+def _write_plan_ledger(tmp_path: Path, plan: list[dict], flags: list[str] | None = None) -> Path:
+    path = tmp_path / "plan.jsonl"
+    Ledger(path).append(
+        LedgerEntry(
+            tool="myplanner",
+            kind="plan",
+            outcome="success",
+            data={"plan": plan, "flags": flags or []},
+        )
+    )
+    return path
+
+
+def test_planner_next_horizon_boosts_a_scaffold_over_an_older_one(tmp_path: Path) -> None:
+    # Two ready scaffolds; my-reviewer is older so it would win oldest-first. A
+    # MyPlanner "build my-tester next" boost flips the pick.
+    runner = FakeRunner(repos=[], issues={})
+    manifest = write_manifest(
+        tmp_path,
+        [
+            mentry("MyReviewer", "my-reviewer", "2026-01-01"),
+            mentry("MyTester", "my-tester", "2026-06-01"),
+        ],
+    )
+    plan_ledger = _write_plan_ledger(
+        tmp_path, [{"item": "build my-tester", "rationale": "unblocks coverage", "horizon": "next"}]
+    )
+
+    rec = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=manifest,
+        repo_root=make_repo_root(tmp_path, [], signals={}),
+        ledger=Ledger(tmp_path / "ledger.jsonl"),
+        runner=runner,
+        plan_ledger=plan_ledger,
+    ).next()
+
+    assert rec.chosen is not None
+    assert rec.chosen.id == "scaffold:my-tester"  # boost beats the older my-reviewer
+
+
+def test_planner_pause_flag_drops_scaffolds_below_live_issues(tmp_path: Path) -> None:
+    # A live issue and a much older ready scaffold: normally the scaffold (older)
+    # wins, but a "pause new tools" flag penalizes it below the issue.
+    repos = ["my-guard"]
+    runner = FakeRunner(
+        repos=repos,
+        issues={"my-guard": [issue(1, "guard bug", "2026-05-01T00:00:00Z")]},
+    )
+    manifest = write_manifest(tmp_path, [mentry("MyTester", "my-tester", "2026-01-01")])
+    plan_ledger = _write_plan_ledger(
+        tmp_path, [], flags=["pause new tools, close a safety gap first"]
+    )
+
+    rec = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=manifest,
+        repo_root=make_repo_root(tmp_path, repos, signals={}),
+        ledger=Ledger(tmp_path / "ledger.jsonl"),
+        runner=runner,
+        plan_ledger=plan_ledger,
+    ).next()
+
+    assert rec.chosen is not None
+    assert rec.chosen.id == "my-guard#1"  # scaffold penalized below the live issue

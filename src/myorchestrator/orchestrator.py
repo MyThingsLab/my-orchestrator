@@ -16,6 +16,7 @@ from myorchestrator.manifest import load_manifest
 from myorchestrator.sources import (
     issue_candidates,
     list_repos,
+    read_plan_signal,
     scaffold_candidates,
     scan_urgency,
 )
@@ -58,6 +59,7 @@ class Orchestrator:
         engine: Engine | None = None,
         policy: Policy | None = None,
         tracking: Tracking | None = None,
+        plan_ledger: str | Path | None = None,
     ) -> None:
         self.org = org
         self.manifest_path = Path(manifest_path)
@@ -67,6 +69,13 @@ class Orchestrator:
         self.engine: Engine = engine or NoopEngine()
         self.policy: Policy = policy or _AllowPolicy()
         self.tracking = tracking
+        # MyPlanner writes kind=plan to its own runtime ledger, not a dev-ledger;
+        # default to where it lands when MyPlanner runs in its repo.
+        self.plan_ledger = Path(
+            plan_ledger
+            if plan_ledger is not None
+            else self.repo_root / "my-planner" / ".mythings" / "ledger.jsonl"
+        )
 
     def next(self) -> Recommendation:
         return self.next_n(1)[0]
@@ -79,10 +88,22 @@ class Orchestrator:
         # on anyway, just by a different worker.
         repos = list_repos(self.runner, self.org)  # step 1
         built = set(repos)
+        manifest = load_manifest(self.manifest_path)
         urgency = scan_urgency(self.repo_root, repos)  # step 4 signals
+        # A plan can name an unbuilt tool ("build my-tester next"), so the match
+        # universe is live repos plus every manifest repo, not just what exists yet.
+        universe = repos + [t.repo for t in manifest]
+        signal = read_plan_signal(self.plan_ledger, universe)  # MyPlanner's pacing signal
+        for repo, boost in signal.boosts.items():
+            urgency[repo] = urgency.get(repo, 0) + boost
         candidates = [
             *issue_candidates(self.runner, self.org, repos, urgency),  # step 2 (live issues)
-            *scaffold_candidates(load_manifest(self.manifest_path), built),  # step 2+3 (proposals)
+            *scaffold_candidates(  # step 2+3 (proposals)
+                manifest,
+                built,
+                urgency,
+                penalty=signal.scaffold_penalty,
+            ),
         ]
         ranked = rank(candidates)  # step 4 ranking
 
