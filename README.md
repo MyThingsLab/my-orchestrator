@@ -5,9 +5,8 @@
 Picks the single next unit of work across the whole [MyThingsLab](../mythings-core)
 fleet, for the one available worker.
 
-While only the interactive session can run judgment steps (no real `Engine`
-backend yet), "which of N designed tools / open issues should be tackled next"
-is a recurring manual decision. `myorchestrator next` replaces it with a live,
+"Which of N designed tools / open issues should be tackled next" is a
+recurring decision. `myorchestrator next` replaces it with a live,
 re-computable answer — prioritized **deterministically** wherever possible.
 
 ## How it works
@@ -36,6 +35,16 @@ and never chains into another tool's CLI.
 myorchestrator next            # human-readable
 myorchestrator next --json     # machine-readable
 ```
+
+## In the fleet loop
+
+`myorchestrator` is never invoked directly by another tool's CLI — the org
+root's [`fleet_dispatch.py`](../fleet_dispatch.py) imports `Orchestrator` as a
+library to rank candidates and hand them to workers, and
+[`fleet_cycle.py`](../fleet_cycle.py) chains it with the rest of the fleet
+(`myplanner` → `fleet_dispatch` → `mytester`/`mychangelogger` →
+`myprojector` → `myreporter` → `mytelegrambot`) into one autonomous cycle. See
+the [org README](../README.md) for the full loop.
 
 ## Install (development)
 
