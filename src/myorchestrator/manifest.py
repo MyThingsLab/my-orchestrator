@@ -11,7 +11,7 @@ from mythings import github
 # The machine-readable dependency graph among not-yet-built tools. JSON, not YAML,
 # because the runtime must stay dependency-free (stdlib json vs. a third-party YAML
 # parser). Canonically this belongs beside the design docs in
-# mythings-core/docs/tools/manifest.json; a copy ships here as package data so the
+# my-things-core/docs/tools/manifest.json; a copy ships here as package data so the
 # tool is usable before that shared-repo addition lands.
 
 

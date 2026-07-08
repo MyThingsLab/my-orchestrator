@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/MyThingsLab/my-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/MyThingsLab/my-orchestrator/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/MyThingsLab/my-orchestrator/branch/main/graph/badge.svg)](https://codecov.io/gh/MyThingsLab/my-orchestrator) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Picks the single next unit of work across the whole [MyThingsLab](../mythings-core)
+Picks the single next unit of work across the whole [MyThingsLab](../my-things-core)
 fleet, for the one available worker.
 
 "Which of N designed tools / open issues should be tackled next" is a
@@ -50,7 +50,7 @@ the [org README](../README.md) for the full loop.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ../mythings-core -e ".[dev]"
+pip install -e ../my-things-core -e ".[dev]"
 pytest
 ```
 
