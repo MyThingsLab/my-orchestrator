@@ -235,7 +235,7 @@ def test_tracking_update_is_gated_by_policy(tmp_path: Path) -> None:
         ledger=Ledger(tmp_path / "ledger.jsonl"),
         runner=runner,
         policy=_DenyEdits(),
-        tracking=Tracking(repo="MyThingsLab/mythings-core", issue=1),
+        tracking=Tracking(repo="MyThingsLab/my-things-core", issue=1),
     ).next()
 
     # DENY => the issue-edit gh call never reaches the runner.

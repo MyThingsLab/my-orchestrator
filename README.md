@@ -2,12 +2,11 @@
 
 [![CI](https://github.com/MyThingsLab/my-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/MyThingsLab/my-orchestrator/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/MyThingsLab/my-orchestrator/branch/main/graph/badge.svg)](https://codecov.io/gh/MyThingsLab/my-orchestrator) ![Python](https://img.shields.io/badge/python-3.11%2B-blue) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Picks the single next unit of work across the whole [MyThingsLab](../mythings-core)
+Picks the single next unit of work across the whole [MyThingsLab](../my-things-core)
 fleet, for the one available worker.
 
-While only the interactive session can run judgment steps (no real `Engine`
-backend yet), "which of N designed tools / open issues should be tackled next"
-is a recurring manual decision. `myorchestrator next` replaces it with a live,
+"Which of N designed tools / open issues should be tackled next" is a
+recurring decision. `myorchestrator next` replaces it with a live,
 re-computable answer — prioritized **deterministically** wherever possible.
 
 ## How it works
@@ -37,11 +36,21 @@ myorchestrator next            # human-readable
 myorchestrator next --json     # machine-readable
 ```
 
+## In the fleet loop
+
+`myorchestrator` is never invoked directly by another tool's CLI — the org
+root's [`fleet_dispatch.py`](../fleet_dispatch.py) imports `Orchestrator` as a
+library to rank candidates and hand them to workers, and
+[`fleet_cycle.py`](../fleet_cycle.py) chains it with the rest of the fleet
+(`myplanner` → `fleet_dispatch` → `mytester`/`mychangelogger` →
+`myprojector` → `myreporter` → `mytelegrambot`) into one autonomous cycle. See
+the [org README](../README.md) for the full loop.
+
 ## Install (development)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ../mythings-core -e ".[dev]"
+pip install -e ../my-things-core -e ".[dev]"
 pytest
 ```
 
