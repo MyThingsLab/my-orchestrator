@@ -80,7 +80,10 @@ def scaffold_candidates(
     urgency = urgency or {}
     out: list[Candidate] = []
     for tool in manifest:
-        if tool.repo in built_repos:
+        # The registry lists the whole fleet; only a still-unbuilt design is a
+        # scaffold candidate. The status check also covers a partial repo
+        # listing, where a shipped repo could be missing from built_repos.
+        if tool.status == "shipped" or tool.repo in built_repos:
             continue
         if not is_ready(tool, built_repos=built_repos):
             continue
