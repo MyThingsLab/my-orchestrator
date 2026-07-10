@@ -8,11 +8,11 @@ from pathlib import Path
 
 from mythings import github
 
-# The machine-readable dependency graph among not-yet-built tools. JSON, not YAML,
-# because the runtime must stay dependency-free (stdlib json vs. a third-party YAML
-# parser). Canonically this belongs beside the design docs in
-# my-things-core/docs/tools/manifest.json; a copy ships here as package data so the
-# tool is usable before that shared-repo addition lands.
+# The machine-readable fleet registry. Canonical copy is my-things-core's
+# tools_manifest.json, shipped as `mythings` package data (like harness.md) —
+# reading it from the installed core means this tool can never fall behind the
+# fleet the way its own vendored 16-entry copy did. Still stdlib json: the
+# runtime stays dependency-free.
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,11 @@ class ProposedTool:
     title: str
     added: str  # ISO date the proposal was recorded; the oldest-first key
     depends_on: list[str]  # "tool:<repo>" (built) or "core:<attr>" (landed on github.GitHub)
+    status: str = "designed"  # "designed" | "building" | "shipped"
 
 
 def default_manifest_path() -> Path:
-    return Path(str(files("myorchestrator").joinpath("manifest.json")))
+    return Path(str(files("mythings").joinpath("tools_manifest.json")))
 
 
 def load_manifest(path: str | Path) -> list[ProposedTool]:
@@ -37,6 +38,7 @@ def load_manifest(path: str | Path) -> list[ProposedTool]:
             title=obj.get("title", ""),
             added=obj["added"],
             depends_on=list(obj.get("depends_on", [])),
+            status=obj.get("status", "designed"),
         )
         for obj in raw
     ]

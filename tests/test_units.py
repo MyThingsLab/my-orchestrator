@@ -107,3 +107,23 @@ def test_scaffold_candidates_apply_boost_and_penalty() -> None:
     by_repo = {c.repo: c.urgency for c in cands}
     assert by_repo["my-tester"] == 3 - 100  # boosted then penalized
     assert by_repo["my-reviewer"] == -100  # only penalized
+
+
+def test_scaffold_candidates_skip_shipped_entries() -> None:
+    manifest = [
+        ProposedTool("MyTester", "my-tester", "t", "2026-01-01", [], status="shipped"),
+        ProposedTool("MyReviewer", "my-reviewer", "r", "2026-01-02", []),
+    ]
+    # my-tester is absent from built_repos (e.g. a partial listing) but the
+    # registry already knows it shipped — it must not resurface as a scaffold.
+    cands = scaffold_candidates(manifest, built_repos=set())
+    assert [c.repo for c in cands] == ["my-reviewer"]
+
+
+def test_default_manifest_is_the_core_fleet_registry() -> None:
+    from myorchestrator.manifest import default_manifest_path, load_manifest
+
+    tools = load_manifest(default_manifest_path())
+    assert len(tools) >= 30
+    assert {t.status for t in tools} <= {"designed", "building", "shipped"}
+    assert any(t.status == "designed" for t in tools)
