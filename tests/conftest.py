@@ -3,37 +3,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mythings.engine import EngineRequest, EngineResult
 from mythings.ledger import Ledger, LedgerEntry
 
+# Shared fakes come from mythings.testing; the repo-list/issue-list gh double
+# and the manifest/repo-root builders stay local.
+from mythings.testing import FakeGh, ScriptedEngine
 
-class FakeRunner:
-    # Mocks the `gh` process boundary: argv is everything after `gh`.
-    def __init__(self, repos: list[str], issues: dict[str, list[dict]]) -> None:
-        self.repos = repos
-        self.issues = issues
-        self.calls: list[list[str]] = []
-
-    def __call__(self, argv: list[str]) -> str:
-        self.calls.append(argv)
-        if argv[:2] == ["repo", "list"]:
-            return json.dumps([{"name": r} for r in self.repos])
-        if argv[:2] == ["issue", "list"]:
-            repo = argv[argv.index("--repo") + 1].split("/", 1)[1]
-            return json.dumps(self.issues.get(repo, []))
-        if argv[:2] == ["issue", "edit"]:
-            return ""
-        raise AssertionError(f"unexpected gh call: {argv}")
+__all__ = ["ScriptedEngine"]
 
 
-class SpyEngine:
-    def __init__(self, result: EngineResult | None = None) -> None:
-        self.calls: list[EngineRequest] = []
-        self.result = result or EngineResult(text="", data={})
+def fake_gh(repos: list[str], issues: dict[str, list[dict]]) -> FakeGh:
+    def issue_list(argv: list[str]) -> str:
+        repo = argv[argv.index("--repo") + 1].split("/", 1)[1]
+        return json.dumps(issues.get(repo, []))
 
-    def run(self, request: EngineRequest) -> EngineResult:
-        self.calls.append(request)
-        return self.result
+    return FakeGh(
+        {
+            ("repo", "list"): json.dumps([{"name": r} for r in repos]),
+            ("issue", "list"): issue_list,
+            ("issue", "edit"): "",
+        }
+    )
 
 
 def issue(number: int, title: str, created_at: str) -> dict:
