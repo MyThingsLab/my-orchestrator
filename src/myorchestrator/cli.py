@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from mythings.engine import ClaudeCLIEngine, Engine
 from mythings.ledger import Ledger
 
+from myorchestrator.assess import AssessResult
 from myorchestrator.manifest import default_manifest_path
 from myorchestrator.orchestrator import Orchestrator, Recommendation, Tracking
 
@@ -48,6 +50,19 @@ def _render_many(recs: list[Recommendation], *, as_json: bool) -> str:
             lines.append(f"worker {i + 1}: (none) — no ready candidates")
         else:
             lines.append(f"worker {i + 1}: {rec.chosen.id}\n  {rec.chosen.title}\n  why: {rec.reason}")  # noqa: E501
+    return "\n".join(lines)
+
+
+def _render_assess(result: AssessResult, *, as_json: bool) -> str:
+    if as_json:
+        return json.dumps(asdict(result), separators=(",", ":"), sort_keys=True)
+    if result.reason and not result.created and not result.skipped:
+        return f"assess: {result.reason}"
+    lines = [f"assess: {len(result.created)} filed, {len(result.skipped)} skipped"]
+    for c in result.created:
+        lines.append(f"  + {c['title']}  -> {c['url']}")
+    for s in result.skipped:
+        lines.append(f"  - {s['title']}  ({s['reason']})")
     return "\n".join(lines)
 
 
@@ -93,7 +108,47 @@ def main(argv: list[str] | None = None) -> int:
         help="model for --engine claude-cli (default: the CLI's own default; ignored by noop)",
     )
 
+    asm = sub.add_parser(
+        "assess", help="mine a repo's ASSESSMENT.md into deduplicated issues when idle"
+    )
+    asm.add_argument("repo", help="target repo name, without the org prefix")
+    asm.add_argument("--json", action="store_true", help="machine-readable output")
+    asm.add_argument("--org", default="MyThingsLab")
+    asm.add_argument("--manifest", type=Path, default=default_manifest_path())
+    asm.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path.cwd().parent,
+        help="directory holding each repo as a subdir (defaults to the workspace root)",
+    )
+    asm.add_argument("--ledger", type=Path, default=Path(".mythings/ledger.jsonl"))
+    asm.add_argument(
+        "--engine",
+        choices=sorted(_ENGINE_NAMES),
+        default="noop",
+        help="Engine backend for mining ASSESSMENT.md (default: noop — files nothing)",
+    )
+    asm.add_argument(
+        "--engine-model",
+        help="model for --engine claude-cli (default: the CLI's own default; ignored by noop)",
+    )
+    asm.add_argument(
+        "--max-new", type=int, default=5, help="cap on issues filed in one run (default: 5)"
+    )
+
     args = parser.parse_args(argv)
+
+    if args.cmd == "assess":
+        orch = Orchestrator(
+            org=args.org,
+            manifest_path=args.manifest,
+            repo_root=args.repo_root,
+            ledger=Ledger(args.ledger),
+            engine=build_engine(args.engine, model=args.engine_model),
+        )
+        print(_render_assess(orch.assess(args.repo, max_new=args.max_new), as_json=args.json))
+        return 0
+
     if args.count < 1:
         parser.error("--count must be >= 1")
     tracking = (

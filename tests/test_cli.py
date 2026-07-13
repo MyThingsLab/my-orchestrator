@@ -6,6 +6,7 @@ import pytest
 from mythings.engine import ClaudeCLIEngine
 
 from myorchestrator import cli
+from myorchestrator.assess import AssessResult
 from myorchestrator.candidates import Candidate
 from myorchestrator.orchestrator import Recommendation
 
@@ -34,6 +35,7 @@ def _stub_orch(
     *,
     one: Recommendation | None = None,
     many: list[Recommendation] | None = None,
+    assessed: AssessResult | None = None,
 ) -> dict:
     captured: dict = {}
 
@@ -48,6 +50,10 @@ def _stub_orch(
         def next_n(self, count: int) -> list[Recommendation]:
             captured["called"] = ("next_n", count)
             return many
+
+        def assess(self, repo: str, *, max_new: int = 5) -> AssessResult:
+            captured["called"] = ("assess", repo, max_new)
+            return assessed
 
     monkeypatch.setattr(cli, "Orchestrator", _Stub)
     return captured
@@ -188,3 +194,44 @@ def test_tracking_is_none_when_only_one_flag_given(monkeypatch: pytest.MonkeyPat
 def test_missing_subcommand_is_a_usage_error() -> None:
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_assess_calls_orchestrator_assess_with_repo_and_max_new(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _stub_orch(monkeypatch, assessed=AssessResult(reason="no ASSESSMENT.md"))
+
+    code = cli.main(["assess", "my-target", "--max-new", "3"])
+
+    assert code == 0
+    assert captured["called"] == ("assess", "my-target", 3)
+
+
+def test_assess_renders_created_and_skipped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = AssessResult(
+        created=[{"title": "fresh issue", "issue": 7, "url": "https://x/7"}],
+        skipped=[{"title": "already tracked", "reason": "already open"}],
+        engine_used=True,
+    )
+    _stub_orch(monkeypatch, assessed=result)
+
+    cli.main(["assess", "my-target"])
+
+    out = capsys.readouterr().out
+    assert "1 filed, 1 skipped" in out
+    assert "fresh issue" in out
+    assert "already tracked" in out
+
+
+def test_assess_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = AssessResult(created=[{"title": "fresh issue", "issue": 7, "url": "https://x/7"}])
+    _stub_orch(monkeypatch, assessed=result)
+
+    cli.main(["assess", "my-target", "--json"])
+
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["created"][0]["title"] == "fresh issue"
