@@ -11,6 +11,8 @@ from mythings.isolation import in_github_actions
 from mythings.ledger import Ledger
 from mythings.policy import ALLOW, Action, Decision, Policy, PolicyResult
 
+from myorchestrator.assess import AssessResult
+from myorchestrator.assess import assess as _assess
 from myorchestrator.candidates import Candidate, leaders, rank
 from myorchestrator.manifest import load_manifest
 from myorchestrator.sources import (
@@ -79,6 +81,19 @@ class Orchestrator:
 
     def next(self) -> Recommendation:
         return self.next_n(1)[0]
+
+    def assess(self, repo: str, *, max_new: int = 5) -> AssessResult:
+        result = _assess(
+            org=self.org,
+            repo=repo,
+            repo_root=self.repo_root,
+            engine=self.engine,
+            policy=self.policy,
+            runner=self.runner,
+            max_new=max_new,
+        )
+        self._record_assess(repo, result)
+        return result
 
     def next_n(self, count: int) -> list[Recommendation]:
         # count=1 keeps the original single-worker path (Engine tie-break and the
@@ -179,6 +194,17 @@ class Orchestrator:
             candidates=[c.id for c in rec.candidates],
             chosen=chosen_id,
             reason=rec.reason,
+        )
+
+    def _record_assess(self, repo: str, result: AssessResult) -> None:
+        self.ledger.record(
+            tool="myorchestrator",
+            kind="assess",
+            outcome="success",
+            detail=f"assess {repo}: {len(result.created)} filed, {len(result.skipped)} skipped",
+            created=result.created,
+            skipped=result.skipped,
+            engine_used=result.engine_used,
         )
 
     def _update_tracking(self, chosen: Candidate) -> None:
