@@ -3,13 +3,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from mythings.ledger import Ledger, LedgerEntry
 
 # Shared fakes come from mythings.testing; the repo-list/issue-list gh double
 # and the manifest/repo-root builders stay local.
 from mythings.testing import FakeGh, ScriptedEngine
+from mythings.testing import clean_git_env as _shared_clean_git_env  # noqa: F401
 
 __all__ = ["ScriptedEngine"]
+
+
+@pytest.fixture(autouse=True)
+def _clean_git_env(request: pytest.FixtureRequest) -> None:
+    # Real git worktrees in tests/test_plans.py; hook-launched pytest
+    # (pre-commit) must not leak GIT_* into them.
+    request.getfixturevalue("_shared_clean_git_env")
 
 
 def fake_gh(repos: list[str], issues: dict[str, list[dict]]) -> FakeGh:
