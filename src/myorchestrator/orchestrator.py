@@ -15,6 +15,7 @@ from myorchestrator.assess import AssessResult
 from myorchestrator.assess import assess as _assess
 from myorchestrator.candidates import Candidate, leaders, rank
 from myorchestrator.manifest import load_manifest
+from myorchestrator.plans import PolicyDenied, sync_plans
 from myorchestrator.sources import (
     issue_candidates,
     list_repos,
@@ -25,7 +26,7 @@ from myorchestrator.sources import (
 
 _ENGINE_SYSTEM = (
     "Among these deterministically-tied candidates, choose which the single available "
-    'worker should tackle next, and say why. Reply with only a JSON object: '
+    "worker should tackle next, and say why. Reply with only a JSON object: "
     '{"chosen": "<candidate id>", "reason": "<one sentence>"}, nothing else.'
 )
 
@@ -111,8 +112,9 @@ class Orchestrator:
         signal = read_plan_signal(self.plan_ledger, universe)  # MyPlanner's pacing signal
         for repo, boost in signal.boosts.items():
             urgency[repo] = urgency.get(repo, 0) + boost
+        blocked = self._sync_plans(repos)  # step 1.5: plans/*.md dependency gating
         candidates = [
-            *issue_candidates(self.runner, self.org, repos, urgency),  # step 2 (live issues)
+            *issue_candidates(self.runner, self.org, repos, urgency, blocked),  # step 2 (issues)
             *scaffold_candidates(  # step 2+3 (proposals)
                 manifest,
                 built,
@@ -159,6 +161,29 @@ class Orchestrator:
         for rec in recs:
             self._record(rec)
         return recs
+
+    def _sync_plans(self, repos: list[str]) -> dict[str, frozenset[int]]:
+        # sync_plans() no-ops for a repo with no local plans/*.md (same
+        # convention scan_urgency's dev-ledger read already relies on: a repo
+        # this worker hasn't cloned, or that has none, is silently skipped).
+        blocked: dict[str, frozenset[int]] = {}
+        for repo in repos:
+            try:
+                result = sync_plans(
+                    repo_root=self.repo_root,
+                    org=self.org,
+                    repo=repo,
+                    runner=self.runner,
+                    policy=self.policy,
+                )
+            except (PolicyDenied, RuntimeError):
+                # A dirty local checkout or a denied git op must not take down
+                # the whole ranking pass -- worst case, this repo's plan just
+                # doesn't get a fresher read this cycle.
+                continue
+            if result.blocked_issues:
+                blocked[repo] = result.blocked_issues
+        return blocked
 
     def _break_tie(self, tied: list[Candidate]) -> tuple[Candidate, str]:
         result = self.engine.run(

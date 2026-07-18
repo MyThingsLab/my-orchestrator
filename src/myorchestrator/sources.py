@@ -33,7 +33,9 @@ def issue_candidates(
     org: str,
     repos: list[str],
     urgency: dict[str, int],
+    blocked: dict[str, frozenset[int]] | None = None,
 ) -> list[Candidate]:
+    blocked = blocked or {}
     out: list[Candidate] = []
     for repo in repos:
         label = _backlog_label(repo)
@@ -51,7 +53,12 @@ def issue_candidates(
             "--json",
             "number,title,createdAt",
         ]
+        repo_blocked = blocked.get(repo, frozenset())
         for obj in json.loads(runner(argv)):
+            if obj["number"] in repo_blocked:
+                # plans/*.md says this issue depends on an unfinished task --
+                # not a real candidate no matter how old it is (my-orchestrator#19).
+                continue
             out.append(
                 Candidate(
                     id=f"{repo}#{obj['number']}",
@@ -189,6 +196,4 @@ def _match_repo(text: str, repos: list[str]) -> str | None:
 
 
 def _has_pause_flag(flags: list) -> bool:
-    return any(
-        isinstance(f, str) and any(m in f.lower() for m in _PAUSE_MARKERS) for f in flags
-    )
+    return any(isinstance(f, str) and any(m in f.lower() for m in _PAUSE_MARKERS) for f in flags)

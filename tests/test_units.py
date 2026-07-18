@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from mythings.ledger import LedgerEntry
 
+from conftest import fake_gh, issue
 from myorchestrator.candidates import Candidate, leaders, rank
 from myorchestrator.manifest import ProposedTool, is_ready
 from myorchestrator.sources import (
+    issue_candidates,
     plan_signal_from_entry,
     scaffold_candidates,
     urgency_from_entries,
@@ -101,12 +103,24 @@ def test_scaffold_candidates_apply_boost_and_penalty() -> None:
         ProposedTool("MyTester", "my-tester", "t", "2026-01-01", []),
         ProposedTool("MyReviewer", "my-reviewer", "r", "2026-01-02", []),
     ]
-    cands = scaffold_candidates(
-        manifest, built_repos=set(), urgency={"my-tester": 3}, penalty=100
-    )
+    cands = scaffold_candidates(manifest, built_repos=set(), urgency={"my-tester": 3}, penalty=100)
     by_repo = {c.repo: c.urgency for c in cands}
     assert by_repo["my-tester"] == 3 - 100  # boosted then penalized
     assert by_repo["my-reviewer"] == -100  # only penalized
+
+
+def test_issue_candidates_excludes_blocked_issue_numbers() -> None:
+    runner = fake_gh(
+        repos=["my-t"],
+        issues={
+            "my-t": [
+                issue(1, "foundation", "2026-01-01T00:00:00Z"),
+                issue(2, "feature", "2026-01-02T00:00:00Z"),
+            ]
+        },
+    )
+    cands = issue_candidates(runner, "o", ["my-t"], {}, blocked={"my-t": frozenset({2})})
+    assert [c.id for c in cands] == ["my-t#1"]  # #2 is blocked on an unfinished dependency
 
 
 def test_scaffold_candidates_skip_shipped_entries() -> None:
