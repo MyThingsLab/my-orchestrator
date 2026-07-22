@@ -23,6 +23,10 @@ class ProposedTool:
     added: str  # ISO date the proposal was recorded; the oldest-first key
     depends_on: list[str]  # "tool:<repo>" (built) or "core:<attr>" (landed on github.GitHub)
     status: str = "designed"  # "designed" | "building" | "shipped"
+    # Optional, machine-checkable JSON-Schema fragments for the tool's CLI
+    # args / ledger data payload -- null until authored for a given tool.
+    input_schema: dict | None = None
+    output_schema: dict | None = None
 
 
 def default_manifest_path() -> Path:
@@ -39,6 +43,8 @@ def load_manifest(path: str | Path) -> list[ProposedTool]:
             added=obj["added"],
             depends_on=list(obj.get("depends_on", [])),
             status=obj.get("status", "designed"),
+            input_schema=obj.get("input_schema"),
+            output_schema=obj.get("output_schema"),
         )
         for obj in raw
     ]
