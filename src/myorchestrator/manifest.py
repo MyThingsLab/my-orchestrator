@@ -7,6 +7,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from mythings import github
+from mythings.github import GitHubError, Runner
 
 # The machine-readable fleet registry. Canonical copy is my-things-core's
 # tools_manifest.json, shipped as `mythings` package data (like harness.md) —
@@ -54,16 +55,65 @@ def _core_has(attr: str) -> bool:
     return hasattr(github.GitHub, attr)
 
 
+def always_healthy(_name: str) -> bool:
+    return True
+
+
+def _critical_issue_repos(runner: Runner, org: str) -> frozenset[str] | None:
+    # None means the search itself failed -- the caller must fail closed, not
+    # assume every dependency is healthy just because the signal was unreadable.
+    try:
+        raw = runner(
+            [
+                "search", "issues", "--owner", org, "--state", "open",
+                "--label", "critical", "--json", "repository",
+            ]
+        )
+    except GitHubError:
+        return None
+    try:
+        return frozenset(
+            obj["repository"]["nameWithOwner"].rsplit("/", 1)[-1] for obj in json.loads(raw)
+        )
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def critical_issue_health_check(runner: Runner, org: str) -> Callable[[str], bool]:
+    # Reuses the fleet's one existing critical-halt signal (CONVENTIONS.md
+    # "Filing bugs": an open `critical`-labelled issue anywhere halts new
+    # dispatch org-wide) as a per-dependency readiness check, rather than
+    # inventing a second kind of health probe. One org-wide search, made
+    # lazily on first use and cached for the life of this closure (meant to
+    # be constructed once per orchestrator run), so checking N dependencies
+    # costs at most one `gh` call, not N.
+    state: dict[str, frozenset[str] | None] = {}
+
+    def check(name: str) -> bool:
+        if "repos" not in state:
+            state["repos"] = _critical_issue_repos(runner, org)
+        repos = state["repos"]
+        if repos is None:
+            # The search itself failed -- fail closed (unready), matching the
+            # fleet's general ASK/DENY-over-silent-proceed bias rather than
+            # assuming every dependency is fine.
+            return False
+        return name not in repos
+
+    return check
+
+
 def is_ready(
     tool: ProposedTool,
     *,
     built_repos: set[str],
     core_has: Callable[[str], bool] = _core_has,
+    dep_is_healthy: Callable[[str], bool] = always_healthy,
 ) -> bool:
     for dep in tool.depends_on:
         prefix, _, name = dep.partition(":")
         if prefix == "tool":
-            if name not in built_repos:
+            if name not in built_repos or not dep_is_healthy(name):
                 return False
         elif prefix == "core":
             if not core_has(name):
