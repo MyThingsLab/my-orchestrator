@@ -14,7 +14,7 @@ from mythings.policy import ALLOW, Action, Decision, Policy, PolicyResult
 from myorchestrator.assess import AssessResult
 from myorchestrator.assess import assess as _assess
 from myorchestrator.candidates import Candidate, leaders, rank
-from myorchestrator.manifest import load_manifest
+from myorchestrator.manifest import critical_issue_health_check, load_manifest
 from myorchestrator.plans import PolicyDenied, sync_plans
 from myorchestrator.sources import (
     issue_candidates,
@@ -120,6 +120,10 @@ class Orchestrator:
                 built,
                 urgency,
                 penalty=signal.scaffold_penalty,
+                # Don't recommend scaffolding a new tool on top of a dependency
+                # that's currently broken -- reuses the fleet's one critical-
+                # halt signal, lazily fetched at most once per call.
+                dep_is_healthy=critical_issue_health_check(self.runner, self.org),
             ),
         ]
         ranked = rank(candidates)  # step 4 ranking

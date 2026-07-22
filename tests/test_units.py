@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+
+from mythings.github import GitHubError
 from mythings.ledger import LedgerEntry
 
 from conftest import fake_gh, issue
 from myorchestrator.candidates import Candidate, leaders, rank
-from myorchestrator.manifest import ProposedTool, is_ready
+from myorchestrator.manifest import (
+    ProposedTool,
+    critical_issue_health_check,
+    is_ready,
+)
 from myorchestrator.sources import (
     issue_candidates,
     plan_signal_from_entry,
@@ -50,6 +57,65 @@ def test_is_ready_tool_dependency() -> None:
 def test_is_ready_core_dependency() -> None:
     assert is_ready(_tool(["core:diff"]), built_repos=set(), core_has=lambda a: a == "diff")
     assert not is_ready(_tool(["core:diff"]), built_repos=set(), core_has=lambda _: False)
+
+
+def test_is_ready_defaults_to_healthy_when_no_check_given() -> None:
+    # Purely additive: a caller that never passes dep_is_healthy sees the same
+    # behavior as before this existed.
+    assert is_ready(_tool(["tool:my-wiki"]), built_repos={"my-wiki"})
+
+
+def test_is_ready_unhealthy_dependency_is_not_ready() -> None:
+    assert not is_ready(
+        _tool(["tool:my-wiki"]), built_repos={"my-wiki"}, dep_is_healthy=lambda _: False
+    )
+
+
+def _critical_search_result(*, org: str, broken_repos: list[str]):
+    def runner(argv: list[str]) -> str:
+        assert argv[:2] == ["search", "issues"]
+        assert argv[argv.index("--owner") + 1] == org
+        return json.dumps(
+            [{"repository": {"nameWithOwner": f"{org}/{r}"}} for r in broken_repos]
+        )
+
+    return runner
+
+
+def test_critical_issue_health_check_flags_repo_with_open_critical_issue() -> None:
+    check = critical_issue_health_check(
+        _critical_search_result(org="o", broken_repos=["my-guard"]), "o"
+    )
+    assert check("my-guard") is False
+    assert check("my-wiki") is True
+
+
+def test_critical_issue_health_check_fails_closed_on_gh_error() -> None:
+    def raising_runner(argv: list[str]) -> str:
+        raise GitHubError("gh search issues failed (1): rate limited")
+
+    check = critical_issue_health_check(raising_runner, "o")
+    assert check("my-wiki") is False
+
+
+def test_critical_issue_health_check_fails_closed_on_malformed_json() -> None:
+    check = critical_issue_health_check(lambda argv: "not json", "o")
+    assert check("my-wiki") is False
+
+
+def test_critical_issue_health_check_caches_across_calls() -> None:
+    calls = []
+
+    def runner(argv: list[str]) -> str:
+        calls.append(argv)
+        return json.dumps([])
+
+    check = critical_issue_health_check(runner, "o")
+    check("my-wiki")
+    check("my-guard")
+    check("my-tester")
+
+    assert len(calls) == 1  # one org-wide search, not one per dependency checked
 
 
 def test_urgency_open_and_resolved_signals() -> None:
@@ -132,6 +198,21 @@ def test_scaffold_candidates_skip_shipped_entries() -> None:
     # registry already knows it shipped — it must not resurface as a scaffold.
     cands = scaffold_candidates(manifest, built_repos=set())
     assert [c.repo for c in cands] == ["my-reviewer"]
+
+
+def test_scaffold_candidates_excludes_unhealthy_dependency() -> None:
+    manifest = [
+        ProposedTool("MyReviewer", "my-reviewer", "r", "2026-01-02", ["tool:my-guard"]),
+        ProposedTool("MyTester", "my-tester", "t", "2026-01-01", ["tool:my-wiki"]),
+    ]
+    cands = scaffold_candidates(
+        manifest,
+        built_repos={"my-guard", "my-wiki"},
+        dep_is_healthy=lambda name: name != "my-guard",
+    )
+    # my-reviewer depends on the unhealthy my-guard -- not recommended for
+    # scaffolding until that's fixed; my-tester's dependency is unaffected.
+    assert [c.repo for c in cands] == ["my-tester"]
 
 
 def test_default_manifest_is_the_core_fleet_registry() -> None:

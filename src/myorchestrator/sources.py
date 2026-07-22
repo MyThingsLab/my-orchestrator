@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from mythings.github import Runner
 from mythings.ledger import Ledger, LedgerEntry
 
 from myorchestrator.candidates import Candidate
-from myorchestrator.manifest import ProposedTool, is_ready
+from myorchestrator.manifest import ProposedTool, always_healthy, is_ready
 
 # All fleet reads go through the same `gh` boundary the core `github` contract uses
 # (an injected Runner), so tests mock only that process. Core `github.GitHub` has no
@@ -79,9 +80,13 @@ def scaffold_candidates(
     urgency: dict[str, int] | None = None,
     *,
     penalty: int = 0,
+    dep_is_healthy: Callable[[str], bool] = always_healthy,
 ) -> list[Candidate]:
     # A proposal with no repo yet becomes a "scaffold this tool" candidate, kept only
-    # if every dependency in its manifest entry is already satisfied (readiness).
+    # if every dependency in its manifest entry is already satisfied (readiness) AND
+    # healthy -- don't recommend building on top of a dependency that's currently
+    # broken (dep_is_healthy defaults to a no-op; the orchestrator wires in a real
+    # check via manifest.critical_issue_health_check).
     # `urgency` lets a MyPlanner "build X next" boost surface a specific scaffold;
     # `penalty` lets a "pause new tools" flag push every scaffold down at once.
     urgency = urgency or {}
@@ -92,7 +97,7 @@ def scaffold_candidates(
         # listing, where a shipped repo could be missing from built_repos.
         if tool.status == "shipped" or tool.repo in built_repos:
             continue
-        if not is_ready(tool, built_repos=built_repos):
+        if not is_ready(tool, built_repos=built_repos, dep_is_healthy=dep_is_healthy):
             continue
         out.append(
             Candidate(
