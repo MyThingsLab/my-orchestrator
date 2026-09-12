@@ -52,7 +52,7 @@ def issue_candidates(
             "--limit",
             "100",
             "--json",
-            "number,title,createdAt",
+            "number,title,createdAt,labels",
         ]
         repo_blocked = blocked.get(repo, frozenset())
         for obj in json.loads(runner(argv)):
@@ -69,9 +69,18 @@ def issue_candidates(
                     kind="issue",
                     created_at=obj["createdAt"],
                     urgency=urgency.get(repo, 0),
+                    number=obj["number"],
+                    labels=_label_names(obj.get("labels")),
                 )
             )
     return out
+
+
+def _label_names(raw: object) -> tuple[str, ...]:
+    # `gh issue list --json labels` returns objects; ranking only needs names.
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(o["name"]) for o in raw if isinstance(o, dict) and "name" in o)
 
 
 def scaffold_candidates(
@@ -79,7 +88,7 @@ def scaffold_candidates(
     built_repos: set[str],
     urgency: dict[str, int] | None = None,
     *,
-    penalty: int = 0,
+    paused: bool = False,
     dep_is_healthy: Callable[[str], bool] = always_healthy,
 ) -> list[Candidate]:
     # A proposal with no repo yet becomes a "scaffold this tool" candidate, kept only
@@ -87,8 +96,12 @@ def scaffold_candidates(
     # healthy -- don't recommend building on top of a dependency that's currently
     # broken (dep_is_healthy defaults to a no-op; the orchestrator wires in a real
     # check via manifest.critical_issue_health_check).
-    # `urgency` lets a MyPlanner "build X next" boost surface a specific scaffold;
-    # `penalty` lets a "pause new tools" flag push every scaffold down at once.
+    # `urgency` still carries MyPlanner's "build X next" boost for reporting, but
+    # ranking is the label sort_key now, so a "pause new tools" flag can no longer
+    # be expressed as a large negative score -- it is a filter: `paused` drops
+    # every scaffold outright, which is what the flag always meant.
+    if paused:
+        return []
     urgency = urgency or {}
     out: list[Candidate] = []
     for tool in manifest:
@@ -107,7 +120,12 @@ def scaffold_candidates(
                 title=tool.title,
                 kind="scaffold",
                 created_at=tool.added,
-                urgency=urgency.get(tool.repo, 0) - penalty,
+                urgency=urgency.get(tool.repo, 0),
+                # A proposed tool has no issue to label. `lane:product` is what
+                # it would be labelled as the moment it becomes one, and no
+                # `prio:*` means it ranks after every prioritized product issue
+                # -- an unbuilt design should not preempt live work.
+                labels=("lane:product",),
             )
         )
     return out
@@ -153,18 +171,17 @@ def scan_urgency(repo_root: str | Path, repos: list[str]) -> dict[str, int]:
     return out
 
 
-# MyPlanner feeds its plan back as one more ranking signal, the same role the
-# drift/ask urgency boosts play: a "next" item raises its repo, "soon" nudges it,
-# and a "pause new tools" flag penalizes every scaffold at once.
+# MyPlanner feeds its plan back as a reported signal (a "next" item raises its
+# repo's urgency, "soon" nudges it) plus one hard gate: a "pause new tools" flag
+# stops scaffolds entirely.
 _HORIZON_BOOST = {"next": 3, "soon": 1, "later": 0}
 _PAUSE_MARKERS = ("pause new tool", "freeze new tool", "no new tool", "hold new tool")
-_SCAFFOLD_PENALTY = 100  # enough to drop any paused scaffold below every live issue
 
 
 @dataclass(frozen=True)
 class PlanSignal:
-    boosts: dict[str, int] = field(default_factory=dict)  # repo -> ranking boost
-    scaffold_penalty: int = 0  # subtracted from every scaffold candidate
+    boosts: dict[str, int] = field(default_factory=dict)  # repo -> urgency boost
+    scaffold_paused: bool = False  # drop every scaffold candidate
 
 
 def plan_signal_from_entry(entry: LedgerEntry, repos: list[str]) -> PlanSignal:
@@ -174,8 +191,8 @@ def plan_signal_from_entry(entry: LedgerEntry, repos: list[str]) -> PlanSignal:
         if repo is None:
             continue
         boosts[repo] = boosts.get(repo, 0) + _HORIZON_BOOST.get(item.get("horizon", ""), 0)
-    penalty = _SCAFFOLD_PENALTY if _has_pause_flag(entry.data.get("flags") or []) else 0
-    return PlanSignal(boosts={r: b for r, b in boosts.items() if b}, scaffold_penalty=penalty)
+    paused = _has_pause_flag(entry.data.get("flags") or [])
+    return PlanSignal(boosts={r: b for r, b in boosts.items() if b}, scaffold_paused=paused)
 
 
 def read_plan_signal(plan_ledger: str | Path, repos: list[str]) -> PlanSignal:

@@ -7,7 +7,7 @@ from mythings.engine import ClaudeCLIEngine
 
 from myorchestrator import cli
 from myorchestrator.assess import AssessResult
-from myorchestrator.candidates import Candidate
+from myorchestrator.candidates import Candidate, Excluded
 from myorchestrator.orchestrator import Recommendation
 
 
@@ -24,9 +24,14 @@ def _rec(
     reason: str = "because",
     engine_used: bool = False,
     candidates: list[Candidate] | None = None,
+    excluded: list[Excluded] | None = None,
 ) -> Recommendation:
     return Recommendation(
-        chosen=chosen, reason=reason, candidates=candidates or [], engine_used=engine_used
+        chosen=chosen,
+        reason=reason,
+        candidates=candidates or [],
+        engine_used=engine_used,
+        excluded=excluded or [],
     )
 
 
@@ -69,7 +74,29 @@ def test_as_dict_with_a_choice() -> None:
         "reason": "oldest",
         "engine_used": False,
         "candidates": ["repo#1", "repo#2"],
+        "excluded": [],
     }
+
+
+def test_as_dict_carries_the_exclusions_and_their_reasons() -> None:
+    rec = _rec(
+        chosen=_cand("repo#1"),
+        excluded=[Excluded(candidate=_cand("repo#9"), reasons=("missing lane", "missing size"))],
+    )
+    assert cli._as_dict(rec)["excluded"] == [
+        {"id": "repo#9", "reasons": ["missing lane", "missing size"]}
+    ]
+
+
+def test_render_lists_undispatchable_issues_under_the_choice() -> None:
+    rec = _rec(
+        chosen=_cand("repo#1"),
+        excluded=[Excluded(candidate=_cand("repo#9"), reasons=("missing lane",))],
+    )
+    out = cli._render(rec, as_json=False)
+
+    assert "not dispatchable (1):" in out
+    assert "repo#9  (missing lane)" in out
 
 
 def test_as_dict_without_a_choice() -> None:

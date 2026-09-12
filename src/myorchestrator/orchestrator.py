@@ -13,7 +13,7 @@ from mythings.policy import ALLOW, Action, Decision, Policy, PolicyResult
 
 from myorchestrator.assess import AssessResult
 from myorchestrator.assess import assess as _assess
-from myorchestrator.candidates import Candidate, leaders, rank
+from myorchestrator.candidates import Candidate, Excluded, leaders, rank, triage
 from myorchestrator.manifest import critical_issue_health_check, load_manifest
 from myorchestrator.plans import PolicyDenied, sync_plans
 from myorchestrator.sources import (
@@ -42,6 +42,10 @@ class Recommendation:
     reason: str
     candidates: list[Candidate] = field(default_factory=list)
     engine_used: bool = False
+    # Issues the label filters kept out of the running, each with why. Reported,
+    # never silently dropped: an unlabelled or size:L issue is work for
+    # my-architect, and it only gets done if somebody can see it.
+    excluded: list[Excluded] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -119,17 +123,23 @@ class Orchestrator:
                 manifest,
                 built,
                 urgency,
-                penalty=signal.scaffold_penalty,
+                paused=signal.scaffold_paused,
                 # Don't recommend scaffolding a new tool on top of a dependency
                 # that's currently broken -- reuses the fleet's one critical-
                 # halt signal, lazily fetched at most once per call.
                 dep_is_healthy=critical_issue_health_check(self.runner, self.org),
             ),
         ]
-        ranked = rank(candidates)  # step 4 ranking
+        dispatchable, excluded = triage(candidates)  # step 3.5: the CAD label filters
+        ranked = rank(dispatchable)  # step 4 ranking, by mythings.labels.sort_key
 
         if not ranked:
-            rec = Recommendation(chosen=None, reason="no ready candidates", candidates=ranked)
+            rec = Recommendation(
+                chosen=None,
+                reason="no ready candidates",
+                candidates=ranked,
+                excluded=excluded,
+            )
             self._record(rec)
             return [rec]
 
@@ -138,14 +148,19 @@ class Orchestrator:
             if len(top) == 1:
                 rec = Recommendation(
                     chosen=top[0],
-                    reason="sole top candidate by oldest-first ranking",
+                    reason="sole top candidate by CAD label ranking",
                     candidates=ranked,
                     engine_used=False,
+                    excluded=excluded,
                 )
             else:
                 chosen, reason = self._break_tie(top)  # step 5
                 rec = Recommendation(
-                    chosen=chosen, reason=reason, candidates=ranked, engine_used=True
+                    chosen=chosen,
+                    reason=reason,
+                    candidates=ranked,
+                    engine_used=True,
+                    excluded=excluded,
                 )
             self._record(rec)
             if rec.chosen is not None and self.tracking is not None:
@@ -159,6 +174,7 @@ class Orchestrator:
                 reason=f"ranked pick {i + 1}/{len(picks)} for {count} available workers",
                 candidates=ranked,
                 engine_used=False,
+                excluded=excluded,
             )
             for i, c in enumerate(picks)
         ]
@@ -209,9 +225,9 @@ class Orchestrator:
         chosen_id = obj.get("chosen")
         if isinstance(chosen_id, str) and chosen_id in by_id:
             return by_id[chosen_id], str(obj.get("reason", ""))
-        # NoopEngine / unusable reply: fall back to strict oldest-first. `tied` is
-        # already ranked, so tied[0] is the deterministic winner.
-        return tied[0], "tie broken deterministically (oldest-first) — Engine gave no usable choice"
+        # NoopEngine / unusable reply: fall back to sort_key's (repo, number)
+        # tail. `tied` is already ranked, so tied[0] is the deterministic winner.
+        return tied[0], "tie broken deterministically (repo, number) — Engine gave no usable choice"
 
     def _record(self, rec: Recommendation) -> None:
         chosen_id = rec.chosen.id if rec.chosen else ""
@@ -223,6 +239,7 @@ class Orchestrator:
             candidates=[c.id for c in rec.candidates],
             chosen=chosen_id,
             reason=rec.reason,
+            excluded=[{"id": e.candidate.id, "reasons": list(e.reasons)} for e in rec.excluded],
         )
 
     def _record_assess(self, repo: str, result: AssessResult) -> None:

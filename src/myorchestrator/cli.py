@@ -29,16 +29,29 @@ def _as_dict(rec: Recommendation) -> dict:
         "reason": rec.reason,
         "engine_used": rec.engine_used,
         "candidates": [c.id for c in rec.candidates],
+        "excluded": [{"id": e.candidate.id, "reasons": list(e.reasons)} for e in rec.excluded],
     }
+
+
+def _excluded_lines(rec: Recommendation) -> list[str]:
+    # Printed on every run rather than hidden behind a flag: these are issues
+    # nobody can dispatch until a human or my-architect relabels or splits them.
+    if not rec.excluded:
+        return []
+    lines = [f"not dispatchable ({len(rec.excluded)}):"]
+    lines += [f"  - {e.candidate.id}  ({'; '.join(e.reasons)})" for e in rec.excluded]
+    return lines
 
 
 def _render(rec: Recommendation, *, as_json: bool) -> str:
     if as_json:
         return json.dumps(_as_dict(rec), separators=(",", ":"), sort_keys=True)
     if rec.chosen is None:
-        return "next: (none) — no ready candidates"
-    via = "engine tie-break" if rec.engine_used else "deterministic"
-    return f"next: {rec.chosen.id}  [{via}]\n  {rec.chosen.title}\n  why: {rec.reason}"
+        head = "next: (none) — no ready candidates"
+    else:
+        via = "engine tie-break" if rec.engine_used else "deterministic"
+        head = f"next: {rec.chosen.id}  [{via}]\n  {rec.chosen.title}\n  why: {rec.reason}"
+    return "\n".join([head, *_excluded_lines(rec)])
 
 
 def _render_many(recs: list[Recommendation], *, as_json: bool) -> str:
@@ -50,7 +63,8 @@ def _render_many(recs: list[Recommendation], *, as_json: bool) -> str:
             lines.append(f"worker {i + 1}: (none) — no ready candidates")
         else:
             lines.append(f"worker {i + 1}: {rec.chosen.id}\n  {rec.chosen.title}\n  why: {rec.reason}")  # noqa: E501
-    return "\n".join(lines)
+    # The exclusion list is the same for every worker in one pass; print it once.
+    return "\n".join([*lines, *(_excluded_lines(recs[0]) if recs else [])])
 
 
 def _render_assess(result: AssessResult, *, as_json: bool) -> str:
