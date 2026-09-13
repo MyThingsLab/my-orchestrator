@@ -35,8 +35,20 @@ def fake_gh(repos: list[str], issues: dict[str, list[dict]]) -> FakeGh:
     )
 
 
-def issue(number: int, title: str, created_at: str) -> dict:
-    return {"number": number, "title": title, "createdAt": created_at}
+# A plain, dispatchable CAD label set. Tests about ranking or the hard filters
+# pass their own; the rest just need an issue that survives triage.
+DEFAULT_LABELS = ("lane:product", "prio:P2", "size:S")
+
+
+def issue(
+    number: int, title: str, created_at: str, labels: tuple[str, ...] = DEFAULT_LABELS
+) -> dict:
+    return {
+        "number": number,
+        "title": title,
+        "createdAt": created_at,
+        "labels": [{"name": name} for name in labels],
+    }
 
 
 def make_repo_root(tmp_path: Path, repos: list[str], signals: dict[str, list[LedgerEntry]]) -> Path:

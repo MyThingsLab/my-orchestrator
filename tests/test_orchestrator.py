@@ -14,16 +14,26 @@ def _drift(repo: str) -> LedgerEntry:
     return LedgerEntry(tool="mydriftwatcher", kind="drift", outcome="drift_found", detail=repo)
 
 
-def test_happy_path_picks_most_urgent_without_engine_call(tmp_path: Path) -> None:
-    # Three repos with one open issue each, plus one ready-to-scaffold tool. A drift
-    # signal in my-searcher makes its (newest) issue jump the oldest-first queue.
+def test_happy_path_picks_the_top_lane_and_priority_without_an_engine_call(
+    tmp_path: Path,
+) -> None:
+    # Three repos with one open issue each, plus one ready-to-scaffold tool. The
+    # newest issue wins because it is the only kernel P0 -- lane and priority
+    # outrank age, and the drift signal on my-searcher no longer moves the queue.
     repos = ["my-guard", "my-reporter", "my-searcher"]
     runner = fake_gh(
         repos=repos,
         issues={
             "my-guard": [issue(1, "guard bug", "2026-01-01T00:00:00Z")],
             "my-reporter": [issue(1, "reporter bug", "2026-03-01T00:00:00Z")],
-            "my-searcher": [issue(1, "searcher bug", "2026-05-01T00:00:00Z")],
+            "my-searcher": [
+                issue(
+                    1,
+                    "searcher bug",
+                    "2026-05-01T00:00:00Z",
+                    ("lane:kernel", "prio:P0", "size:S"),
+                )
+            ],
         },
     )
     repo_root = make_repo_root(tmp_path, repos, signals={"my-searcher": [_drift("my-searcher")]})
@@ -48,7 +58,7 @@ def test_happy_path_picks_most_urgent_without_engine_call(tmp_path: Path) -> Non
 
     assert engine.calls == []  # no tie => Engine never fires
     assert rec.chosen is not None
-    assert rec.chosen.id == "my-searcher#1"  # urgency beats the older two
+    assert rec.chosen.id == "my-searcher#1"  # kernel P0 beats the two older product P2s
     assert rec.engine_used is False
     # not-ready MyAdvisor (needs my-wiki) is filtered out; ready MyTester survives
     ids = {c.id for c in rec.candidates}
@@ -254,9 +264,11 @@ def _write_plan_ledger(tmp_path: Path, plan: list[dict], flags: list[str] | None
     return path
 
 
-def test_planner_next_horizon_boosts_a_scaffold_over_an_older_one(tmp_path: Path) -> None:
-    # Two ready scaffolds; my-reviewer is older so it would win oldest-first. A
-    # MyPlanner "build my-tester next" boost flips the pick.
+def test_planner_boost_is_reported_but_does_not_outrank_the_labels(tmp_path: Path) -> None:
+    # Two ready scaffolds, indistinguishable by label, so age decides: my-reviewer
+    # is older and wins. MyPlanner's "build my-tester next" still rides along as
+    # urgency for the reader, but it no longer reorders the queue -- a soft signal
+    # inferred from a plan does not get to outvote a label a human set.
     runner = fake_gh(repos=[], issues={})
     manifest = write_manifest(
         tmp_path,
@@ -279,12 +291,16 @@ def test_planner_next_horizon_boosts_a_scaffold_over_an_older_one(tmp_path: Path
     ).next()
 
     assert rec.chosen is not None
-    assert rec.chosen.id == "scaffold:my-tester"  # boost beats the older my-reviewer
+    assert rec.chosen.id == "scaffold:my-reviewer"  # older, and the boost doesn't move it
+    boosted = next(c for c in rec.candidates if c.id == "scaffold:my-tester")
+    assert boosted.urgency == 3  # still visible in the report
 
 
-def test_planner_pause_flag_drops_scaffolds_below_live_issues(tmp_path: Path) -> None:
-    # A live issue and a much older ready scaffold: normally the scaffold (older)
-    # wins, but a "pause new tools" flag penalizes it below the issue.
+def test_planner_pause_flag_removes_scaffolds_from_the_running(tmp_path: Path) -> None:
+    # A live issue and a much older ready scaffold: age would give it to the
+    # scaffold, but a "pause new tools" flag takes scaffolds out entirely. Under
+    # a label ranking a penalty score has nowhere to go, and "pause" always meant
+    # don't start one, not start one slightly later.
     repos = ["my-guard"]
     runner = fake_gh(
         repos=repos,
@@ -305,4 +321,37 @@ def test_planner_pause_flag_drops_scaffolds_below_live_issues(tmp_path: Path) ->
     ).next()
 
     assert rec.chosen is not None
-    assert rec.chosen.id == "my-guard#1"  # scaffold penalized below the live issue
+    assert rec.chosen.id == "my-guard#1"
+    assert [c.id for c in rec.candidates] == ["my-guard#1"]  # the scaffold is gone, not demoted
+
+
+def test_undispatchable_issues_are_reported_not_silently_dropped(tmp_path: Path) -> None:
+    repos = ["my-guard"]
+    runner = fake_gh(
+        repos=repos,
+        issues={
+            "my-guard": [
+                issue(1, "ready", "2026-05-01T00:00:00Z"),
+                issue(2, "too big", "2026-01-01T00:00:00Z", ("lane:kernel", "prio:P0", "size:L")),
+                issue(3, "unlabelled", "2026-01-01T00:00:00Z", ("my-guard",)),
+                issue(4, "blocked", "2026-01-01T00:00:00Z", ("lane:core", "state:blocked")),
+            ]
+        },
+    )
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+
+    rec = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=write_manifest(tmp_path, []),
+        repo_root=make_repo_root(tmp_path, repos, signals={}),
+        ledger=ledger,
+        runner=runner,
+    ).next()
+
+    # The size:L kernel P0 would have ranked first; it is held back for
+    # decomposition instead, and every exclusion says why.
+    assert rec.chosen is not None and rec.chosen.id == "my-guard#1"
+    assert {e.candidate.id for e in rec.excluded} == {"my-guard#2", "my-guard#3", "my-guard#4"}
+    recorded = {e["id"]: e["reasons"] for e in list(ledger)[0].data["excluded"]}
+    assert "size:L is too large to dispatch as-is; split it first" in recorded["my-guard#2"]
+    assert recorded["my-guard#3"] == ["missing lane", "missing size"]

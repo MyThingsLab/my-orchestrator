@@ -6,7 +6,6 @@ from mythings.github import GitHubError
 from mythings.ledger import LedgerEntry
 
 from conftest import fake_gh, issue
-from myorchestrator.candidates import Candidate, leaders, rank
 from myorchestrator.manifest import (
     ProposedTool,
     critical_issue_health_check,
@@ -19,30 +18,7 @@ from myorchestrator.sources import (
     urgency_from_entries,
 )
 
-
-def _c(id_: str, created_at: str, urgency: int = 0) -> Candidate:
-    return Candidate(
-        id=id_, repo="r", tool="r", title="", kind="issue", created_at=created_at, urgency=urgency
-    )
-
-
-def test_rank_is_urgency_then_oldest_then_id() -> None:
-    a = _c("a", "2026-05-01")
-    b = _c("b", "2026-01-01")
-    c = _c("c", "2026-09-01", urgency=1)
-    ranked = rank([a, b, c])
-    assert [x.id for x in ranked] == ["c", "b", "a"]
-
-
-def test_leaders_groups_same_age_and_urgency() -> None:
-    a = _c("a", "2026-01-01")
-    b = _c("b", "2026-01-01")
-    c = _c("c", "2026-02-01")
-    assert {x.id for x in leaders(rank([a, b, c]))} == {"a", "b"}
-
-
-def test_leaders_single_when_ages_differ() -> None:
-    assert [x.id for x in leaders(rank([_c("a", "2026-01-01"), _c("b", "2026-02-01")]))] == ["a"]
+# Ranking and the label filters live in tests/test_candidates.py.
 
 
 def _tool(depends_on: list[str]) -> ProposedTool:
@@ -150,13 +126,13 @@ def test_plan_signal_boosts_repo_by_horizon() -> None:
     )
     signal = plan_signal_from_entry(entry, repos)
     assert signal.boosts == {"my-tester": 3, "my-reviewer": 1}  # 'later' == 0 dropped
-    assert signal.scaffold_penalty == 0
+    assert signal.scaffold_paused is False
 
 
-def test_plan_signal_pause_flag_penalizes_scaffolds() -> None:
+def test_plan_signal_pause_flag_pauses_scaffolds() -> None:
     entry = _plan_entry([], flags=["pause new tools, close a safety gap first"])
     signal = plan_signal_from_entry(entry, ["my-tester"])
-    assert signal.scaffold_penalty == 100
+    assert signal.scaffold_paused is True
 
 
 def test_plan_signal_unmatched_item_is_ignored() -> None:
@@ -164,15 +140,21 @@ def test_plan_signal_unmatched_item_is_ignored() -> None:
     assert plan_signal_from_entry(entry, ["my-tester"]).boosts == {}
 
 
-def test_scaffold_candidates_apply_boost_and_penalty() -> None:
+def test_scaffold_candidates_carry_the_planner_boost_and_a_product_lane() -> None:
     manifest = [
         ProposedTool("MyTester", "my-tester", "t", "2026-01-01", []),
         ProposedTool("MyReviewer", "my-reviewer", "r", "2026-01-02", []),
     ]
-    cands = scaffold_candidates(manifest, built_repos=set(), urgency={"my-tester": 3}, penalty=100)
-    by_repo = {c.repo: c.urgency for c in cands}
-    assert by_repo["my-tester"] == 3 - 100  # boosted then penalized
-    assert by_repo["my-reviewer"] == -100  # only penalized
+    cands = scaffold_candidates(manifest, built_repos=set(), urgency={"my-tester": 3})
+
+    assert {c.repo: c.urgency for c in cands} == {"my-tester": 3, "my-reviewer": 0}
+    # No prio label: an unbuilt design ranks after every prioritized live issue.
+    assert all(c.labels == ("lane:product",) for c in cands)
+
+
+def test_scaffold_candidates_are_dropped_entirely_when_paused() -> None:
+    manifest = [ProposedTool("MyTester", "my-tester", "t", "2026-01-01", [])]
+    assert scaffold_candidates(manifest, built_repos=set(), paused=True) == []
 
 
 def test_issue_candidates_excludes_blocked_issue_numbers() -> None:
@@ -187,6 +169,20 @@ def test_issue_candidates_excludes_blocked_issue_numbers() -> None:
     )
     cands = issue_candidates(runner, "o", ["my-t"], {}, blocked={"my-t": frozenset({2})})
     assert [c.id for c in cands] == ["my-t#1"]  # #2 is blocked on an unfinished dependency
+
+
+def test_issue_candidates_carry_the_labels_and_number_ranking_needs() -> None:
+    runner = fake_gh(
+        repos=["my-t"],
+        issues={
+            "my-t": [issue(7, "x", "2026-01-01T00:00:00Z", ("lane:core", "prio:P0", "size:M"))]
+        },
+    )
+    (cand,) = issue_candidates(runner, "o", ["my-t"], {})
+
+    assert cand.number == 7
+    assert cand.labels == ("lane:core", "prio:P0", "size:M")
+    assert cand.facets().lane == "core"
 
 
 def test_scaffold_candidates_skip_shipped_entries() -> None:
