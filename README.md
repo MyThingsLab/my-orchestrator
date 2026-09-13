@@ -14,7 +14,7 @@ re-computable answer — prioritized **deterministically** wherever possible.
 Deterministic pre-work, in order:
 
 1. List every repo under the `MyThingsLab` org.
-2. Collect candidates: open issues carrying each repo's backlog label, plus
+2. Collect candidates: every open issue in every repo, plus
    "scaffold this tool" candidates for designed-but-unbuilt tools (from the
    canonical fleet registry, `tools_manifest.json`, shipped as `mythings`
    package data in my-things-core; override with `--manifest`).

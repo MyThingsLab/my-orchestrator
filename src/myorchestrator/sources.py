@@ -24,11 +24,6 @@ def list_repos(runner: Runner, org: str, *, limit: int = 1000) -> list[str]:
     return [obj["name"] for obj in raw]
 
 
-def _backlog_label(repo: str) -> str:
-    # Convention: a tool's backlog label is its repo name (see my-guard's CLAUDE.md).
-    return repo
-
-
 def issue_candidates(
     runner: Runner,
     org: str,
@@ -36,10 +31,20 @@ def issue_candidates(
     urgency: dict[str, int],
     blocked: dict[str, frozenset[int]] | None = None,
 ) -> list[Candidate]:
+    # Every open issue is a candidate; `triage()` decides which are dispatchable.
+    # This used to pre-filter on a per-repo backlog label named after the repo,
+    # which silently became a second, older gate once the CAD labels arrived --
+    # and the two disagreed almost everywhere. Nothing re-applied the backlog
+    # label, so at the time this changed it was carried by 73 of 222 open
+    # issues, and by *none* of the triaged P0s: every `lane:`/`prio:`-labelled
+    # issue in my-fleet, my-coder and my-things-core was invisible here, while
+    # 60 untriaged rough ideas in my-idea were the bulk of what did get through.
+    # One gate, in `mythings.labels.validate()`, which requires lane and size --
+    # so an untriaged issue is still kept out, but as a reported exclusion
+    # rather than by never being fetched.
     blocked = blocked or {}
     out: list[Candidate] = []
     for repo in repos:
-        label = _backlog_label(repo)
         argv = [
             "issue",
             "list",
@@ -47,8 +52,6 @@ def issue_candidates(
             f"{org}/{repo}",
             "--state",
             "open",
-            "--label",
-            label,
             "--limit",
             "100",
             "--json",
