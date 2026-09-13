@@ -354,7 +354,7 @@ def test_undispatchable_issues_are_reported_not_silently_dropped(tmp_path: Path)
     assert {e.candidate.id for e in rec.excluded} == {"my-guard#2", "my-guard#3", "my-guard#4"}
     recorded = {e["id"]: e["reasons"] for e in list(ledger)[0].data["excluded"]}
     assert "size:L is too large to dispatch as-is; split it first" in recorded["my-guard#2"]
-    assert recorded["my-guard#3"] == ["missing lane", "missing size"]
+    assert recorded["my-guard#3"] == ["missing lane", "missing prio", "missing size"]
 
 
 def test_orchestrator_boosts_and_picks_blocker_issue(tmp_path: Path) -> None:

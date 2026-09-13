@@ -96,8 +96,8 @@ def test_leaders_of_an_empty_backlog() -> None:
 
 def test_triage_excludes_blocked_oversized_and_unlabelled_issues() -> None:
     ok = _c(1, "2026-01-01T00:00:00Z", _READY)
-    blocked = _c(2, "2026-01-01T00:00:00Z", ("lane:product", "size:S", "state:blocked"))
-    oversized = _c(3, "2026-01-01T00:00:00Z", ("lane:product", "size:L"))
+    blocked = _c(2, "2026-01-01T00:00:00Z", ("lane:product", "prio:P1", "size:S", "state:blocked"))
+    oversized = _c(3, "2026-01-01T00:00:00Z", ("lane:product", "prio:P1", "size:L"))
     unlabelled = _c(4, "2026-01-01T00:00:00Z", ("my-orchestrator",))
 
     keep, dropped = triage([ok, blocked, oversized, unlabelled])
@@ -107,7 +107,7 @@ def test_triage_excludes_blocked_oversized_and_unlabelled_issues() -> None:
     assert [e.candidate.id for e in dropped] == ["repo#2", "repo#3", "repo#4"]
     assert dropped[0].reasons == ("state:blocked is not dispatchable",)
     assert "size:L" in dropped[1].reasons[0]
-    assert dropped[2].reasons == ("missing lane", "missing size")
+    assert dropped[2].reasons == ("missing lane", "missing prio", "missing size")
 
 
 def test_triage_lets_a_scaffold_through_without_a_size_label() -> None:
