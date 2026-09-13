@@ -89,7 +89,14 @@ def triage(candidates: list[Candidate]) -> tuple[list[Candidate], list[Excluded]
 
 def rank(candidates: list[Candidate], *, now: datetime | None = None) -> list[Candidate]:
     now = now or datetime.now(UTC)
-    return sorted(candidates, key=lambda c: sort_key(c.queue_item(now=now)))
+    return sorted(
+        candidates,
+        key=lambda c: (
+            "critical" not in c.labels,
+            -c.urgency if c.urgency >= 50 else 0,
+            sort_key(c.queue_item(now=now)),
+        ),
+    )
 
 
 # sort_key's last two components, (repo, number), exist only to guarantee a
@@ -103,5 +110,19 @@ def leaders(ranked: list[Candidate], *, now: datetime | None = None) -> list[Can
     if not ranked:
         return []
     now = now or datetime.now(UTC)
-    top = sort_key(ranked[0].queue_item(now=now))[:_DECIDABLE]
-    return [c for c in ranked if sort_key(c.queue_item(now=now))[:_DECIDABLE] == top]
+    top_cand = ranked[0]
+    top = (
+        "critical" in top_cand.labels,
+        top_cand.urgency if top_cand.urgency >= 50 else 0,
+        sort_key(top_cand.queue_item(now=now))[:_DECIDABLE],
+    )
+    return [
+        c
+        for c in ranked
+        if (
+            "critical" in c.labels,
+            c.urgency if c.urgency >= 50 else 0,
+            sort_key(c.queue_item(now=now))[:_DECIDABLE],
+        )
+        == top
+    ]

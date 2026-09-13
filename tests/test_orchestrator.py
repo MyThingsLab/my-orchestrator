@@ -355,3 +355,50 @@ def test_undispatchable_issues_are_reported_not_silently_dropped(tmp_path: Path)
     recorded = {e["id"]: e["reasons"] for e in list(ledger)[0].data["excluded"]}
     assert "size:L is too large to dispatch as-is; split it first" in recorded["my-guard#2"]
     assert recorded["my-guard#3"] == ["missing lane", "missing size"]
+
+
+def test_orchestrator_boosts_and_picks_blocker_issue(tmp_path: Path) -> None:
+    # my-guard#1 is older and prio:P1; my-core#5 is prio:P2 and younger.
+    # But a worker in my-guard recorded outcome="blocked" on my-core#5.
+    # Because my-core#5 is open, it receives a +50 urgency boost and
+    # dispatches next with reason="unblocks other tasks".
+    repos = ["my-guard", "my-core"]
+    runner = fake_gh(
+        repos=repos,
+        issues={
+            "my-guard": [
+                issue(1, "normal bug", "2026-01-01T00:00:00Z", ("lane:core", "prio:P1", "size:S")),
+            ],
+            "my-core": [
+                issue(
+                    5,
+                    "needed dependency",
+                    "2026-06-01T00:00:00Z",
+                    ("lane:product", "prio:P2", "size:S"),
+                ),
+            ],
+        },
+    )
+    repo_root = make_repo_root(tmp_path, repos, signals={})
+    # Record blocked entry in my-guard dev-ledger
+    dev_ledger = Ledger(repo_root / "my-guard" / "dev-ledger" / "session.jsonl")
+    dev_ledger.record(
+        tool="mycoder",
+        kind="build",
+        outcome="blocked",
+        candidate="my-guard#1",
+        blocker="MyThingsLab/my-core#5",
+    )
+
+    rec = Orchestrator(
+        org="MyThingsLab",
+        manifest_path=write_manifest(tmp_path, []),
+        repo_root=repo_root,
+        ledger=Ledger(tmp_path / "ledger.jsonl"),
+        runner=runner,
+    ).next()
+
+    assert rec.chosen is not None
+    assert rec.chosen.id == "my-core#5"
+    assert rec.chosen.urgency == 50
+    assert rec.reason == "unblocks other tasks"

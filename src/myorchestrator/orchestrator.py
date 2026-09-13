@@ -21,6 +21,7 @@ from myorchestrator.sources import (
     list_repos,
     read_plan_signal,
     scaffold_candidates,
+    scan_blocker_urgency,
     scan_urgency,
 )
 
@@ -117,8 +118,18 @@ class Orchestrator:
         for repo, boost in signal.boosts.items():
             urgency[repo] = urgency.get(repo, 0) + boost
         blocked = self._sync_plans(repos)  # step 1.5: plans/*.md dependency gating
+        blocker_boosts = scan_blocker_urgency(
+            self.repo_root, repos, runner=self.runner, org=self.org, ledger=self.ledger
+        )
         candidates = [
-            *issue_candidates(self.runner, self.org, repos, urgency, blocked),  # step 2 (issues)
+            *issue_candidates(
+                self.runner,
+                self.org,
+                repos,
+                urgency,
+                blocked,
+                candidate_urgency=blocker_boosts,
+            ),  # step 2 (issues)
             *scaffold_candidates(  # step 2+3 (proposals)
                 manifest,
                 built,
@@ -146,9 +157,14 @@ class Orchestrator:
         if count == 1:
             top = leaders(ranked)
             if len(top) == 1:
+                reason = (
+                    "unblocks other tasks"
+                    if top[0].urgency >= 50
+                    else "sole top candidate by CAD label ranking"
+                )
                 rec = Recommendation(
                     chosen=top[0],
-                    reason="sole top candidate by CAD label ranking",
+                    reason=reason,
                     candidates=ranked,
                     engine_used=False,
                     excluded=excluded,
