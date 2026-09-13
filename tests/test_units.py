@@ -4,6 +4,7 @@ import json
 
 from mythings.github import GitHubError
 from mythings.ledger import LedgerEntry
+from mythings.testing import FakeGh
 
 from conftest import fake_gh, issue
 from myorchestrator.manifest import (
@@ -22,6 +23,10 @@ from myorchestrator.sources import (
 )
 
 # Ranking and the label filters live in tests/test_candidates.py.
+
+# A fully triaged issue carrying only CAD labels -- no repo-name backlog label,
+# which is what every real P0 in the fleet looks like.
+CAD_ONLY_LABELS = ("lane:kernel", "prio:P0", "kind:bug", "size:S", "state:ready")
 
 
 def _tool(depends_on: list[str]) -> ProposedTool:
@@ -184,6 +189,23 @@ def test_issue_candidates_carry_the_labels_and_number_ranking_needs() -> None:
     assert cand.number == 7
     assert cand.labels == ("lane:core", "prio:P0", "size:M")
     assert cand.facets().lane == "core"
+
+
+def test_issue_candidates_do_not_filter_on_a_backlog_label() -> None:
+    # The regression that made every triaged P0 undispatchable. `fake_gh`
+    # ignores `--label`, so only a double that honours it can catch this: the
+    # old query asked for issues labelled with the repo's own name, which no
+    # P0 in the fleet carried.
+    def issue_list(argv: list[str]) -> str:
+        if "--label" in argv:
+            return "[]"
+        return json.dumps([issue(9, "P0 bug", "2026-01-01T00:00:00Z", CAD_ONLY_LABELS)])
+
+    runner = FakeGh({("issue", "list"): issue_list})
+    cands = issue_candidates(runner, "o", ["my-fleet"], {})
+
+    assert [c.id for c in cands] == ["my-fleet#9"]
+    assert cands[0].facets().prio == "P0"
 
 
 def test_scaffold_candidates_skip_shipped_entries() -> None:
