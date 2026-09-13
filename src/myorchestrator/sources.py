@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +31,7 @@ def issue_candidates(
     repos: list[str],
     urgency: dict[str, int],
     blocked: dict[str, frozenset[int]] | None = None,
+    candidate_urgency: dict[str, int] | None = None,
 ) -> list[Candidate]:
     # Every open issue is a candidate; `triage()` decides which are dispatchable.
     # This used to pre-filter on a per-repo backlog label named after the repo,
@@ -43,6 +45,7 @@ def issue_candidates(
     # so an untriaged issue is still kept out, but as a reported exclusion
     # rather than by never being fetched.
     blocked = blocked or {}
+    candidate_urgency = candidate_urgency or {}
     out: list[Candidate] = []
     for repo in repos:
         argv = [
@@ -63,15 +66,19 @@ def issue_candidates(
                 # plans/*.md says this issue depends on an unfinished task --
                 # not a real candidate no matter how old it is (my-orchestrator#19).
                 continue
+            cand_id = f"{repo}#{obj['number']}"
+            extra = candidate_urgency.get(cand_id, 0) or candidate_urgency.get(
+                f"{org}/{cand_id}", 0
+            )
             out.append(
                 Candidate(
-                    id=f"{repo}#{obj['number']}",
+                    id=cand_id,
                     repo=repo,
                     tool=repo,
                     title=obj.get("title", ""),
                     kind="issue",
                     created_at=obj["createdAt"],
-                    urgency=urgency.get(repo, 0),
+                    urgency=urgency.get(repo, 0) + extra,
                     number=obj["number"],
                     labels=_label_names(obj.get("labels")),
                 )
@@ -172,6 +179,105 @@ def scan_urgency(repo_root: str | Path, repos: list[str]) -> dict[str, int]:
         if score:
             out[repo] = score
     return out
+
+
+_BLOCKER_REF_RE = re.compile(r"(?:([A-Za-z0-9_.-]+)/)?([A-Za-z0-9_.-]+)#(\d+)")
+
+
+def extract_blocker_ref(entry: LedgerEntry) -> tuple[str | None, str, int] | None:
+    # Check structured blocker field first (recorded by my-fleet and my-coder).
+    blocker = entry.data.get("blocker")
+    if isinstance(blocker, str) and blocker.strip():
+        m = _BLOCKER_REF_RE.search(blocker.strip())
+        if m:
+            return m.group(1), m.group(2), int(m.group(3))
+
+    # Fall back to matching explicit blocker signals in detail or final_message
+    for text in (
+        entry.detail,
+        str(entry.data.get("detail", "")),
+        str(entry.data.get("final_message", "")),
+    ):
+        if not text:
+            continue
+        m = _BLOCKER_REF_RE.search(text)
+        if m:
+            return m.group(1), m.group(2), int(m.group(3))
+    return None
+
+
+def is_issue_open(runner: Runner, org: str, repo: str, number: int) -> bool:
+    try:
+        raw = runner(
+            [
+                "issue",
+                "view",
+                str(number),
+                "--repo",
+                f"{org}/{repo}",
+                "--json",
+                "state",
+            ]
+        )
+        data = json.loads(raw)
+        return str(data.get("state", "")).upper() == "OPEN"
+    except Exception:
+        return False
+
+
+def scan_blocker_urgency(
+    repo_root: str | Path,
+    repos: list[str],
+    runner: Runner,
+    org: str,
+    ledger: Ledger | None = None,
+) -> dict[str, int]:
+    # Scans dev-ledgers and the runtime ledger for open `blocked` outcomes.
+    # When an issue is explicitly blocked on <org>/<repo>#<n>, verify if that
+    # blocking issue is currently OPEN via gh. If open, boost the blocking
+    # candidate by +50 so CAD unblocks dependent tasks immediately (my-orchestrator#32).
+    root = Path(repo_root)
+    entries: list[LedgerEntry] = []
+    if ledger is not None:
+        entries.extend([e for e in ledger if e.outcome == "blocked"])
+
+    fleet_ledger = root / ".my-fleet" / "ledger.jsonl"
+    if fleet_ledger.exists() and (ledger is None or getattr(ledger, "path", None) != fleet_ledger):
+        try:
+            entries.extend([e for e in Ledger(fleet_ledger) if e.outcome == "blocked"])
+        except Exception:
+            pass
+
+    for repo in repos:
+        repo_path = root / repo
+        if (repo_path / "dev-ledger").is_dir():
+            try:
+                entries.extend([e for e in read_all(root=repo_path) if e.outcome == "blocked"])
+            except Exception:
+                pass
+
+    boosts: dict[str, int] = {}
+    open_cache: dict[tuple[str, str, int], bool] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for e in entries:
+        ref = extract_blocker_ref(e)
+        if ref is None:
+            continue
+        ref_org, repo, num = ref
+        target_org = ref_org or org
+        key = (target_org, repo, num)
+        if key not in open_cache:
+            open_cache[key] = is_issue_open(runner, target_org, repo, num)
+
+        if open_cache[key]:
+            cand_id = f"{repo}#{num}"
+            blocked_id = str(e.data.get("candidate") or e.data.get("issue") or e.detail or cand_id)
+            if (blocked_id, cand_id) not in seen_pairs:
+                seen_pairs.add((blocked_id, cand_id))
+                boosts[cand_id] = boosts.get(cand_id, 0) + 50
+
+    return boosts
 
 
 # MyPlanner feeds its plan back as a reported signal (a "next" item raises its

@@ -13,9 +13,12 @@ from myorchestrator.manifest import (
     is_ready,
 )
 from myorchestrator.sources import (
+    extract_blocker_ref,
+    is_issue_open,
     issue_candidates,
     plan_signal_from_entry,
     scaffold_candidates,
+    scan_blocker_urgency,
     urgency_from_entries,
 )
 
@@ -56,9 +59,7 @@ def _critical_search_result(*, org: str, broken_repos: list[str]):
     def runner(argv: list[str]) -> str:
         assert argv[:2] == ["search", "issues"]
         assert argv[argv.index("--owner") + 1] == org
-        return json.dumps(
-            [{"repository": {"nameWithOwner": f"{org}/{r}"}} for r in broken_repos]
-        )
+        return json.dumps([{"repository": {"nameWithOwner": f"{org}/{r}"}} for r in broken_repos])
 
     return runner
 
@@ -240,3 +241,81 @@ def test_default_manifest_is_the_core_fleet_registry() -> None:
     assert len(tools) >= 30
     assert {t.status for t in tools} <= {"designed", "building", "shipped"}
     assert any(t.status == "designed" for t in tools)
+
+
+def test_extract_blocker_ref() -> None:
+    # 1. Structured data
+    e1 = LedgerEntry(
+        tool="mycoder",
+        kind="build",
+        outcome="blocked",
+        data={"blocker": "MyThingsLab/my-guard#7"},
+    )
+    assert extract_blocker_ref(e1) == ("MyThingsLab", "my-guard", 7)
+
+    # 2. Detail string
+    e2 = LedgerEntry(
+        tool="fleet_dispatch",
+        kind="dispatch",
+        outcome="blocked",
+        detail="paused on cross-repo blocker my-core#42",
+    )
+    assert extract_blocker_ref(e2) == (None, "my-core", 42)
+
+    # 3. Final message sentinel
+    e3 = LedgerEntry(
+        tool="fleet_dispatch",
+        kind="dispatch",
+        outcome="blocked",
+        data={"final_message": "FLEET-DISPATCH-BLOCKED: MyThingsLab/my-core#99\nsomething else"},
+    )
+    assert extract_blocker_ref(e3) == ("MyThingsLab", "my-core", 99)
+
+    # 4. Non-blocked or missing ref
+    e4 = LedgerEntry(tool="mycoder", kind="build", outcome="success")
+    assert extract_blocker_ref(e4) is None
+
+
+def test_is_issue_open() -> None:
+    runner = fake_gh(
+        repos=["my-repo"],
+        issues={"my-repo": [{"number": 1, "state": "OPEN"}, {"number": 2, "state": "CLOSED"}]},
+    )
+    assert is_issue_open(runner, "MyThingsLab", "my-repo", 1) is True
+    assert is_issue_open(runner, "MyThingsLab", "my-repo", 2) is False
+    assert is_issue_open(runner, "MyThingsLab", "my-repo", 3) is False
+
+
+def test_scan_blocker_urgency_open_and_closed(tmp_path) -> None:
+    from mythings.ledger import Ledger
+
+    root = tmp_path / "workspace"
+    dev = root / "my-worker" / "dev-ledger"
+    dev.mkdir(parents=True)
+    dev_ledger = Ledger(dev / "session.jsonl")
+    dev_ledger.record(
+        tool="mycoder",
+        kind="build",
+        outcome="blocked",
+        candidate="my-worker#1",
+        blocker="MyThingsLab/my-blocker#10",
+    )
+    dev_ledger.record(
+        tool="mycoder",
+        kind="build",
+        outcome="blocked",
+        candidate="my-worker#2",
+        blocker="MyThingsLab/my-closed#20",
+    )
+
+    repos = ["my-worker", "my-blocker", "my-closed"]
+    runner = fake_gh(
+        repos=repos,
+        issues={
+            "my-blocker": [{"number": 10, "state": "OPEN"}],
+            "my-closed": [{"number": 20, "state": "CLOSED"}],
+        },
+    )
+
+    boosts = scan_blocker_urgency(root, repos, runner=runner, org="MyThingsLab")
+    assert boosts == {"my-blocker#10": 50}

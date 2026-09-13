@@ -130,3 +130,41 @@ def test_summary_shows_the_lane_and_priority_the_ranking_used() -> None:
     summary = _c(1, "2026-01-01T00:00:00Z", ("lane:core", "prio:P0", "size:S")).summary()
     assert "lane:core" in summary
     assert "prio:P0" in summary
+
+
+def test_rank_puts_blocker_before_normal_backlog() -> None:
+    # A blocker candidate (urgency >= 50) outranks a normal backlog issue
+    # even if the normal issue has higher prio (P0 vs P2) and is older.
+    normal_p0 = _c(1, "2026-01-01T00:00:00Z", ("lane:core", "prio:P0", "size:S"))
+    blocker_p2 = Candidate(
+        id="repo#2",
+        repo="repo",
+        tool="repo",
+        title="blocks another task",
+        kind="issue",
+        created_at="2026-09-01T00:00:00Z",
+        urgency=50,
+        number=2,
+        labels=("lane:product", "prio:P2", "size:S"),
+    )
+
+    ranked = rank([normal_p0, blocker_p2], now=NOW)
+    assert [c.id for c in ranked] == ["repo#2", "repo#1"]
+
+
+def test_rank_critical_bug_still_outranks_blocker() -> None:
+    critical = _c(1, "2026-09-11T00:00:00Z", ("lane:product", "prio:P3", "size:S", "critical"))
+    blocker = Candidate(
+        id="repo#2",
+        repo="repo",
+        tool="repo",
+        title="blocks another task",
+        kind="issue",
+        created_at="2026-01-01T00:00:00Z",
+        urgency=50,
+        number=2,
+        labels=("lane:core", "prio:P0", "size:S"),
+    )
+
+    ranked = rank([blocker, critical], now=NOW)
+    assert [c.id for c in ranked] == ["repo#1", "repo#2"]
