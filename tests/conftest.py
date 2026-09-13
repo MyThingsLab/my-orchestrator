@@ -23,13 +23,25 @@ def _clean_git_env(request: pytest.FixtureRequest) -> None:
 
 def fake_gh(repos: list[str], issues: dict[str, list[dict]]) -> FakeGh:
     def issue_list(argv: list[str]) -> str:
-        repo = argv[argv.index("--repo") + 1].split("/", 1)[1]
+        repo_arg = argv[argv.index("--repo") + 1]
+        repo = repo_arg.split("/", 1)[1] if "/" in repo_arg else repo_arg
         return json.dumps(issues.get(repo, []))
+
+    def issue_view(argv: list[str]) -> str:
+        repo_arg = argv[argv.index("--repo") + 1]
+        repo = repo_arg.split("/", 1)[1] if "/" in repo_arg else repo_arg
+        number = int(argv[argv.index("view") + 1])
+        for obj in issues.get(repo, []):
+            if obj.get("number") == number:
+                state = obj.get("state", "OPEN")
+                return json.dumps({"state": state})
+        return json.dumps({"state": "CLOSED"})
 
     return FakeGh(
         {
             ("repo", "list"): json.dumps([{"name": r} for r in repos]),
             ("issue", "list"): issue_list,
+            ("issue", "view"): issue_view,
             ("issue", "edit"): "",
         }
     )
