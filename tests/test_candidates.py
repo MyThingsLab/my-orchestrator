@@ -22,16 +22,27 @@ def _c(number: int, created_at: str, labels: tuple[str, ...], repo: str = "repo"
     )
 
 
-def test_rank_puts_lane_before_priority_before_age() -> None:
+def test_rank_puts_priority_before_lane_before_age() -> None:
     kernel_p2 = _c(1, "2026-09-01T00:00:00Z", ("lane:kernel", "prio:P2", "size:S"))
     core_p3 = _c(2, "2026-09-01T00:00:00Z", ("lane:core", "prio:P3", "size:S"))
     product_p0 = _c(3, "2026-01-01T00:00:00Z", ("lane:product", "prio:P0", "size:S"))
 
     ranked = rank([product_p0, kernel_p2, core_p3], now=NOW)
 
-    # Lane wins outright: a core P3 outranks a kernel P2, and both outrank a
-    # product P0 that is eight months older.
-    assert [c.id for c in ranked] == ["repo#2", "repo#1", "repo#3"]
+    # Priority wins outright: the product P0 leads despite being the lowest
+    # lane, and the core P3 comes last despite being the highest one. Under
+    # the original lane-first key this was exactly reversed, which made
+    # prio:P0 mean "first within its lane" rather than what the label says.
+    assert [c.id for c in ranked] == ["repo#3", "repo#1", "repo#2"]
+
+
+def test_rank_falls_back_to_lane_among_equal_priorities() -> None:
+    # Lane still decides among equals, so "core stays stable" survives as a
+    # tiebreak rather than as a veto over the whole queue.
+    core_p0 = _c(1, "2026-09-01T00:00:00Z", ("lane:core", "prio:P0", "size:S"))
+    kernel_p0 = _c(2, "2026-09-01T00:00:00Z", ("lane:kernel", "prio:P0", "size:S"))
+
+    assert [c.id for c in rank([kernel_p0, core_p0], now=NOW)] == ["repo#1", "repo#2"]
 
 
 def test_rank_falls_through_to_oldest_first_within_a_lane_and_priority() -> None:

@@ -24,8 +24,10 @@ Deterministic pre-work, in order:
    large to dispatch — it needs my-architect to decompose it first), and a
    missing `lane` or `size` are each excluded and **reported**, never defaulted
    and never silently skipped.
-5. Rank with `mythings.labels.sort_key` — `(not critical, lane, prio, -age,
-   repo, number)`, lexicographic and constant-free. Ledger urgency signals (an
+5. Rank with `mythings.labels.sort_key` — `(not critical, prio, lane, -age,
+   repo, number)`, lexicographic and constant-free. Priority outranks lane, so
+   a `prio:P0` anywhere in the fleet leads a lower-priority `lane:core` item;
+   lane decides among equal priorities. Ledger urgency signals (an
    unresolved `kind=drift`, a `kind=ask` awaiting a reply) and MyPlanner's
    horizon boosts are reported alongside each candidate but no longer reorder
    it: an inferred score does not outvote a label a human set.
