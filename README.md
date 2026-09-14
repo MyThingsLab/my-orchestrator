@@ -49,13 +49,20 @@ myorchestrator next --json     # machine-readable
 
 ## In the fleet loop
 
-`myorchestrator` is never invoked directly by another tool's CLI — the org
-root's [`fleet_dispatch.py`](../fleet_dispatch.py) imports `Orchestrator` as a
-library to rank candidates and hand them to workers, and
-[`fleet_cycle.py`](../fleet_cycle.py) chains it with the rest of the fleet
-(`myplanner` → `fleet_dispatch` → `mytester`/`mychangelogger` →
-`myprojector` → `myreporter` → `mytelegrambot`) into one autonomous cycle. See
-the [org README](../README.md) for the full loop.
+`myorchestrator` is never invoked as a CLI by another tool. It is **imported
+as a library**: `my-fleet`'s
+[`fleet_dispatch.py`](https://github.com/MyThingsLab/my-fleet/blob/main/src/myfleet/fleet_dispatch.py)
+pulls in `Orchestrator` (along with `candidates` and `manifest`) to rank work
+and hand it to `my-coder` as the worker, and
+[`fleet_cycle.py`](https://github.com/MyThingsLab/my-fleet/blob/main/src/myfleet/fleet_cycle.py)
+chains that dispatch step with the rest of the fleet (`myplanner` →
+`fleet_dispatch` → `mytester`/`mychangelogger` → `myprojector` →
+`myreporter` → `mytelegrambot`) into one autonomous cycle.
+
+Being imported rather than shelled out to is what puts `myorchestrator` on
+the fleet's critical path: a breaking change to `Orchestrator`'s API breaks
+dispatch itself. See the
+[org profile](https://github.com/MyThingsLab) for the full loop.
 
 ## Install (development)
 
